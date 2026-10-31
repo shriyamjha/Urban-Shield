@@ -1,0 +1,6 @@
+{
+  "name": "UrbanShield — City Safety & GIS Intelligence",
+  "description": "Universal City Safety Intelligence, Smart Route Scoring, Community Incident Reporting, and Emergency SOS Response Platform for Chandigarh and Mohali.",
+  "requestFramePermissions": ["geolocation"],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}

@@ -1,0 +1,93 @@
+@import "tailwindcss";
+@import "leaflet/dist/leaflet.css";
+@custom-variant dark (&:where(.dark, .dark *));
+
+@layer base {
+  :root {
+    --font-display: 'Plus Jakarta Sans', sans-serif;
+    --font-sans: 'DM Sans', sans-serif;
+    --font-mono: 'JetBrains Mono', monospace;
+  }
+
+  body {
+    font-family: var(--font-sans);
+    background-color: #08090B;
+    color: #FFFFFF;
+    letter-spacing: 0.005em;
+  }
+
+  h1, h2, h3, h4, .font-display {
+    font-family: var(--font-display);
+  }
+
+  .font-mono, .tabular-nums {
+    font-family: var(--font-mono);
+    font-variant-numeric: tabular-nums;
+  }
+}
+
+/* Custom Leaflet NightWise Black Aesthetic Overrides */
+.leaflet-container {
+  background-color: #08090B !important;
+  font-family: 'DM Sans', sans-serif !important;
+}
+
+/* Subtle dark filter option for standard OSM raster tiles when Dark Map mode is enabled */
+.urbanshield-osm-dark-tiles {
+  filter: brightness(0.84) contrast(1.08) saturate(0.88);
+}
+
+.leaflet-popup-content-wrapper {
+  background: #111316 !important;
+  color: #FFFFFF !important;
+  border: 1px solid #262930 !important;
+  border-radius: 6px !important;
+  padding: 0 !important;
+  box-shadow: 0 16px 32px rgba(0, 0, 0, 0.75) !important;
+}
+
+.leaflet-popup-content {
+  margin: 0 !important;
+  line-height: 1.4 !important;
+}
+
+.leaflet-popup-tip {
+  background: #111316 !important;
+  border: 1px solid #262930 !important;
+}
+
+.leaflet-control-zoom {
+  border: 1px solid #262930 !important;
+  border-radius: 6px !important;
+  overflow: hidden !important;
+  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.5) !important;
+}
+
+.leaflet-control-zoom a {
+  background-color: #111316 !important;
+  color: #E5E7EB !important;
+  border-bottom: 1px solid #262930 !important;
+  width: 30px !important;
+  height: 30px !important;
+  line-height: 30px !important;
+  font-size: 15px !important;
+}
+
+.leaflet-control-zoom a:hover {
+  background-color: #181A1F !important;
+  color: #00D2FF !important;
+}
+
+.leaflet-control-attribution {
+  background: rgba(8, 9, 11, 0.85) !important;
+  color: #8A909E !important;
+  font-size: 10px !important;
+  padding: 2px 6px !important;
+  border-top: 1px solid #1E2026 !important;
+  border-left: 1px solid #1E2026 !important;
+}
+
+.leaflet-control-attribution a {
+  color: #00D2FF !important;
+  text-decoration: none !important;
+}
