@@ -48,7 +48,9 @@ import {
   createCommunityReportRecord,
   updateCommunityReportRecord,
   toggleCommunityReportConfirmation,
+  ensureDatabaseTables,
 } from './src/db/users.ts';
+import { databaseConnectionInfo } from './src/db/index.ts';
 
 dotenv.config();
 
@@ -2072,6 +2074,25 @@ async function startServer() {
         error: 'Open-Meteo weather service temporarily unreachable.',
       });
     }
+  });
+
+  // Health and Database Connection Diagnostics
+  app.get('/api/health', (_req, res) => {
+    res.json({
+      status: 'healthy',
+      timestamp: new Date().toISOString(),
+      database: databaseConnectionInfo,
+      services: {
+        routing: 'OSRM OpenStreetMap Router',
+        gis: 'Overpass API & Verified Baseline Gazetteer',
+        weather: 'Open-Meteo API',
+      },
+    });
+  });
+
+  // Initialize and verify database tables
+  await ensureDatabaseTables().catch((err) => {
+    console.warn('[UrbanShield DB] Startup table check note:', err?.message || err);
   });
 
   if (process.env.NODE_ENV !== 'production') {

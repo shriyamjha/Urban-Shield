@@ -83,12 +83,15 @@ cp .env.example .env
 
 | Variable | Scope | Description |
 | :--- | :--- | :--- |
-| `VITE_SUPABASE_URL` | Client (`VITE_`) | Public Supabase project URL (optional if using Cloud SQL/local store) |
-| `VITE_SUPABASE_ANON_KEY` | Client (`VITE_`) | Public Supabase anonymous key (enforced by RLS policies) |
-| `PORT` | Server-Only | HTTP & WebSocket server port (default `3000`) |
-| `SESSION_SECRET` | Server-Only | Secret key for HMAC-SHA256 stateless session tokens |
-| `SQL_HOST`, `SQL_USER`, `SQL_PASSWORD`, `SQL_DATABASE`, `SQL_PORT` | Server-Only | Optional PostgreSQL connection parameters for Drizzle ORM |
-| `TWILIO_ACCOUNT_SID`, `TWILIO_AUTH_TOKEN`, `TWILIO_FROM_NUMBER` | Server-Only | Optional Twilio SMS credentials for live OTP & SOS SMS dispatch |
+| `DATABASE_URL` | Server-Only | **Recommended** single Supabase PostgreSQL connection string (`postgresql://postgres.[ref]:[pw]@.../postgres`). Automatically enables SSL. |
+| `SQL_HOST`, `SQL_USER`, `SQL_PASSWORD` | Server-Only | Alternative discrete connection parameters for Supabase PostgreSQL (if `DATABASE_URL` not set). |
+| `SQL_PORT` | Server-Only | Optional database port (defaults to `5432`, or `6543` for Supabase connection poolers). |
+| `SQL_DATABASE` | Server-Only | Optional database name (defaults to `postgres`, standard for Supabase). |
+| `VITE_SUPABASE_URL` | Client (`VITE_`) | Public Supabase project URL for browser client. |
+| `VITE_SUPABASE_ANON_KEY` | Client (`VITE_`) | Public Supabase anonymous key for browser client. |
+| `SESSION_SECRET` | Server-Only | Secret key for HMAC-SHA256 stateless session tokens. |
+| `PORT` | Server-Only | HTTP & WebSocket server port (default `3000`). |
+| `TWILIO_ACCOUNT_SID`, `TWILIO_AUTH_TOKEN`, `TWILIO_FROM_NUMBER` | Server-Only | Optional Twilio SMS credentials for live OTP & SOS SMS dispatch. |
 
 ---
 

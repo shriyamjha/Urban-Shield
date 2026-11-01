@@ -359,7 +359,7 @@ loadStoreFromDisk();
 
 let tablesInitialized = false;
 
-async function ensureDatabaseTables() {
+export async function ensureDatabaseTables() {
   if (!db || tablesInitialized) return;
   try {
     await db.execute(`
