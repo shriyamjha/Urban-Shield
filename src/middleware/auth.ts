@@ -1,8 +1,8 @@
 import crypto from 'crypto';
-import { Request, Response, NextFunction } from 'express';
+import type { Request, Response, NextFunction } from 'express';
 import { adminAuth } from '../lib/firebase-admin.ts';
-import { DecodedIdToken } from 'firebase-admin/auth';
-import firebaseConfig from '../../firebase-applet-config.json';
+import type { DecodedIdToken } from 'firebase-admin/auth';
+import firebaseConfig from '../lib/firebaseConfig.ts';
 import {
   getOrCreateUser,
   getUserBundleByUid,

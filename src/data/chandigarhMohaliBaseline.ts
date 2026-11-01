@@ -1,4 +1,4 @@
-import { CityPoi } from '../types/urbanshield.ts';
+import type { CityPoi } from '../types/urbanshield.ts';
 
 export const CHANDIGARH_CENTER: [number, number] = [76.7794, 30.7333]; // [lng, lat]
 export const MOHALI_CENTER: [number, number] = [76.7179, 30.7046];

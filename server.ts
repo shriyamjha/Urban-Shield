@@ -12,7 +12,7 @@ import {
   haversineDistanceKm,
 } from './src/data/chandigarhMohaliBaseline.ts';
 import { HISTORICAL_CRIME_DATABASE } from './src/data/historicalCrimeData.ts';
-import {
+import type {
   UserProfile,
   UserPreferences,
   TrustedContact,
@@ -26,7 +26,7 @@ import {
 } from './src/types/urbanshield.ts';
 import {
   requireAuth,
-  AuthRequest,
+  type AuthRequest,
   localSessionTokens,
   issueStatelessSessionToken,
 } from './src/middleware/auth.ts';
@@ -54,7 +54,7 @@ import { databaseConnectionInfo } from './src/db/index.ts';
 
 dotenv.config();
 
-const PORT = 3000;
+const PORT = Number(process.env.PORT) || 3000;
 
 interface OtpRecord {
   target: string;
@@ -2090,11 +2090,6 @@ async function startServer() {
     });
   });
 
-  // Initialize and verify database tables
-  await ensureDatabaseTables().catch((err) => {
-    console.warn('[UrbanShield DB] Startup table check note:', err?.message || err);
-  });
-
   if (process.env.NODE_ENV !== 'production') {
     const vite = await createViteServer({
       server: { middlewareMode: true },
@@ -2103,14 +2098,30 @@ async function startServer() {
     app.use(vite.middlewares);
   } else {
     const distPath = path.resolve(process.cwd(), 'dist');
-    app.use(express.static(distPath));
-    app.get('*', (_req, res) => {
-      res.sendFile(path.join(distPath, 'index.html'));
-    });
+    if (fs.existsSync(distPath)) {
+      app.use(express.static(distPath));
+      app.get('*', (_req, res) => {
+        const indexPath = path.join(distPath, 'index.html');
+        if (fs.existsSync(indexPath)) {
+          res.sendFile(indexPath);
+        } else {
+          res.status(200).send('UrbanShield Backend is running.');
+        }
+      });
+    } else {
+      app.get('*', (_req, res) => {
+        res.status(200).send('UrbanShield Backend is running. Please run npm run build to serve the frontend client.');
+      });
+    }
   }
 
   server.listen(PORT, '0.0.0.0', () => {
     console.log(`UrbanShield Full-Stack Server running on http://0.0.0.0:${PORT}`);
+
+    // Asynchronously verify database tables without delaying port binding
+    ensureDatabaseTables().catch((err) => {
+      console.warn('[UrbanShield DB] Startup table check note:', err?.message || err);
+    });
   });
 }
 

@@ -8,15 +8,15 @@ import {
   sosIncidents,
   communityReports,
   reportConfirmations,
-  UserRow,
-  TrustedContactRow,
-  CommunityResponderRow,
-  SosIncidentRow,
-  CommunityReportRow,
-  ReportConfirmationRow,
+  type UserRow,
+  type TrustedContactRow,
+  type CommunityResponderRow,
+  type SosIncidentRow,
+  type CommunityReportRow,
+  type ReportConfirmationRow,
 } from './schema.ts';
 import { and, eq, desc } from 'drizzle-orm';
-import {
+import type {
   UserProfile,
   UserPreferences,
   TrustedContact,

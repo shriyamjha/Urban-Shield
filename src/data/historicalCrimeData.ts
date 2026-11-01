@@ -1,4 +1,4 @@
-import { HistoricalCrimeRecord } from '../types/urbanshield.ts';
+import type { HistoricalCrimeRecord } from '../types/urbanshield.ts';
 
 /**
  * PART 6 — HISTORICAL CRIME HOTSPOT INTELLIGENCE DATABASE
