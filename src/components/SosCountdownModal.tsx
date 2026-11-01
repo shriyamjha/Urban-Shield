@@ -43,72 +43,72 @@ export const SosCountdownModal: React.FC<SosCountdownModalProps> = ({
   if (!open) return null;
 
   return (
-    <div className="fixed inset-0 z-50 bg-black/85 flex items-center justify-center p-4">
-      <div className="w-full max-w-md bg-[#111316] border-2 border-[#EF4444] rounded-lg p-5 shadow-2xl space-y-4">
-        <div className="flex items-center justify-between pb-2.5 border-b border-[#22262E]">
-          <div className="flex items-center gap-2 text-[#EF4444] font-display font-bold text-sm uppercase tracking-wider">
+    <div className="fixed inset-0 z-50 bg-black/80 backdrop-blur-sm flex items-center justify-center p-4 urbanshield-fade-in">
+      <div className="w-full max-w-md bg-[#101317] border border-[#FF4148]/60 rounded-2xl p-6 shadow-2xl space-y-5 urbanshield-modal-enter">
+        <div className="flex items-center justify-between pb-3 border-b border-white/[0.06]">
+          <div className="flex items-center gap-2 text-[#FF4148] font-display font-semibold text-sm">
             <Siren className="w-4 h-4" />
-            <span>Confirm Emergency SOS Activation</span>
+            <span>Confirm Emergency SOS</span>
           </div>
           <button
             type="button"
             onClick={onCancel}
-            className="text-[#8A909E] hover:text-white cursor-pointer"
+            className="p-1 rounded-lg text-[#929AA5] hover:text-[#F5F7FA] hover:bg-white/[0.05] cursor-pointer"
           >
             <X className="w-4 h-4" />
           </button>
         </div>
 
         <div className="text-center py-2">
-          <div className="text-[11px] uppercase font-mono text-[#8A909E] mb-1">
+          <div className="text-xs text-[#929AA5] mb-1">
             Broadcasting Emergency SOS in
           </div>
-          <div className="text-5xl font-mono font-bold text-[#EF4444] tabular-nums">
+          <div className="text-5xl font-mono font-bold text-[#FF4148] tabular-nums">
             {secondsLeft}s
           </div>
-          <p className="mt-1.5 text-xs text-slate-300">
+          <p className="mt-1.5 text-xs text-[#929AA5]">
             Cancel below if triggered unintentionally.
           </p>
         </div>
 
-        <div className="space-y-2.5 text-xs">
-          <div className="p-2.5 rounded bg-[#181A1F] border border-[#2A2F3A] flex items-center gap-2 text-slate-200 font-mono">
-            <MapPin className="w-3.5 h-3.5 text-[#EF4444] shrink-0" />
+        <div className="space-y-3 text-xs">
+          <div className="p-3 rounded-xl bg-[#0A0C0F] border border-white/[0.06] flex items-center gap-2 text-[#F5F7FA] font-mono">
+            <MapPin className="w-3.5 h-3.5 text-[#FF4148] shrink-0" />
             <span>
               GPS: {userLocation.lat.toFixed(5)}° N, {userLocation.lng.toFixed(5)}° E
             </span>
           </div>
 
           <div>
-            <label className="block text-[10px] font-mono uppercase text-[#8A909E] mb-1">
+            <label className="block text-[11px] text-[#929AA5] mb-1">
               Sector / Landmark Label
             </label>
             <input
               type="text"
               value={areaLabel}
               onChange={(e) => setAreaLabel(e.target.value)}
-              className="w-full bg-[#181A1F] border border-[#2A2F3A] rounded px-3 py-2 text-white"
+              className="w-full bg-[#0A0C0F] border border-white/[0.08] rounded-xl px-3 py-2 text-[#F5F7FA] focus:outline-none focus:border-[#FF4148]"
             />
           </div>
 
           <div>
-            <label className="block text-[10px] font-mono uppercase text-[#8A909E] mb-1">
+            <label className="block text-[11px] text-[#929AA5] mb-1">
               Emergency Context Note
             </label>
             <input
               type="text"
               value={notes}
               onChange={(e) => setNotes(e.target.value)}
-              className="w-full bg-[#181A1F] border border-[#2A2F3A] rounded px-3 py-2 text-white"
+              className="w-full bg-[#0A0C0F] border border-white/[0.08] rounded-xl px-3 py-2 text-[#F5F7FA] focus:outline-none focus:border-[#FF4148]"
             />
           </div>
         </div>
 
-        <div className="grid grid-cols-2 gap-2.5 pt-2">
+        <div className="grid grid-cols-2 gap-3 pt-1">
           <button
             type="button"
             onClick={onCancel}
-            className="py-2 px-3 rounded bg-[#181A1F] hover:bg-[#22262E] border border-[#2A2F3A] text-xs font-semibold text-white cursor-pointer"
+            className="py-2.5 px-3 rounded-xl bg-[#15191E] hover:bg-[#1C2128] border border-white/[0.08] text-xs font-medium text-[#F5F7FA] cursor-pointer"
           >
             Cancel Countdown
           </button>
@@ -119,7 +119,7 @@ export const SosCountdownModal: React.FC<SosCountdownModalProps> = ({
               setActivating(true);
               onConfirmActivate(notes, areaLabel);
             }}
-            className="py-2 px-3 rounded bg-[#EF4444] hover:bg-red-500 text-xs font-bold text-white cursor-pointer"
+            className="py-2.5 px-3 rounded-xl bg-[#FF4148] hover:bg-[#FF4148]/90 text-xs font-semibold text-white cursor-pointer"
           >
             {activating ? 'Activating...' : 'Activate Immediately'}
           </button>

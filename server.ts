@@ -5,7 +5,7 @@ import crypto from 'crypto';
 import { WebSocketServer, WebSocket } from 'ws';
 import { createServer as createViteServer } from 'vite';
 import * as dotenv from 'dotenv';
-import { GoogleGenAI } from '@google/genai';
+import fs from 'fs';
 import {
   VERIFIED_CHANDIGARH_MOHALI_POIS,
   CHANDIGARH_MOHALI_GAZETTEER,
@@ -28,6 +28,7 @@ import {
   requireAuth,
   AuthRequest,
   localSessionTokens,
+  issueStatelessSessionToken,
 } from './src/middleware/auth.ts';
 import {
   getOrCreateUser,
@@ -46,6 +47,7 @@ import {
   getAllCommunityReports,
   createCommunityReportRecord,
   updateCommunityReportRecord,
+  toggleCommunityReportConfirmation,
 } from './src/db/users.ts';
 
 dotenv.config();
@@ -68,14 +70,7 @@ function hashPassword(password: string, salt?: string): { hash: string; salt: st
 }
 
 function issueLocalSessionToken(uid: string, email: string, name?: string): string {
-  const token = crypto.randomBytes(32).toString('hex');
-  localSessionTokens.set(token, {
-    uid,
-    email,
-    name,
-    expiresAt: Date.now() + 24 * 3600 * 1000,
-  });
-  return token;
+  return issueStatelessSessionToken(uid, email, name);
 }
 
 // Simple rate limiter for report submission & SOS creation
@@ -940,17 +935,30 @@ async function startServer() {
         });
       }
 
-      const expires = new Date(Date.now() + 7 * 24 * 3600 * 1000);
+      if (photoUrl) {
+        const isSafeImage =
+          photoUrl.startsWith('data:image/jpeg;base64,') ||
+          photoUrl.startsWith('data:image/png;base64,') ||
+          photoUrl.startsWith('data:image/webp;base64,') ||
+          photoUrl.startsWith('https://');
+        if (!isSafeImage || photoUrl.length > 3_500_000) {
+          return res.status(400).json({
+            error: 'Attached photo must be a valid JPEG, PNG, or WebP image under 2.5 MB.',
+          });
+        }
+      }
+
+      const expires = new Date(Date.now() + 14 * 24 * 3600 * 1000);
       const report = await createCommunityReportRecord({
         userId: uid,
         reporterName:
           bundle?.user.fullName || bundle?.user.email?.split('@')[0] || 'Verified Citizen',
         category,
-        title: title.trim(),
-        description: description.trim(),
+        title: title.trim().slice(0, 160),
+        description: description.trim().slice(0, 1200),
         latitude: typeof latitude === 'number' ? latitude : 30.7333,
         longitude: typeof longitude === 'number' ? longitude : 76.7794,
-        locationLabel: (locationLabel || 'Chandigarh / Mohali').trim(),
+        locationLabel: (locationLabel || 'Chandigarh / Mohali').trim().slice(0, 140),
         photoUrl: photoUrl || undefined,
         verificationStatus: 'pending',
         confirmationsCount: 1,
@@ -969,32 +977,21 @@ async function startServer() {
     try {
       const uid = req.user!.uid;
       const reportId = Number(req.params.id);
-      const allReports = await getAllCommunityReports();
-      const report = allReports.find((r) => Number(r.id) === reportId);
-      if (!report) {
+      if (!Number.isFinite(reportId)) {
+        return res.status(400).json({ error: 'Invalid report identifier.' });
+      }
+
+      const toggled = await toggleCommunityReportConfirmation(reportId, uid);
+      if (!toggled) {
         return res.status(404).json({ error: 'Community report not found.' });
       }
 
-      if (!report.confirmedByUserIds.includes(uid)) {
-        const nextIds = [...report.confirmedByUserIds, uid];
-        const nextCount = nextIds.length;
-        const nextStatus =
-          report.verificationStatus === 'pending' && nextCount >= 3
-            ? 'community_confirmed'
-            : report.verificationStatus;
-
-        const updated = await updateCommunityReportRecord(reportId, {
-          confirmedByUserIds: nextIds,
-          confirmationsCount: nextCount,
-          verificationStatus: nextStatus,
-        });
-        if (updated) {
-          broadcastEvent('report:updated', updated);
-        }
-        return res.json({ report: updated });
-      }
-
-      res.json({ report });
+      broadcastEvent('report:updated', toggled.report);
+      return res.json({
+        report: toggled.report,
+        confirmed: toggled.confirmed,
+        confirmationsCount: toggled.report.confirmationsCount,
+      });
     } catch (error: any) {
       res.status(500).json({ error: error.message || 'Failed to confirm report.' });
     }
@@ -1002,10 +999,42 @@ async function startServer() {
 
   app.put('/api/reports/:id/status', requireAuth, async (req: AuthRequest, res) => {
     try {
+      const uid = req.user!.uid;
       const reportId = Number(req.params.id);
       const { verificationStatus } = req.body as {
         verificationStatus: CommunityReport['verificationStatus'];
       };
+
+      const [allReports, allResponders, bundle] = await Promise.all([
+        getAllCommunityReports(),
+        getAllResponders(),
+        getUserBundleByUid(uid),
+      ]);
+
+      const report = allReports.find((r) => Number(r.id) === reportId);
+      if (!report) {
+        return res.status(404).json({ error: 'Community report not found.' });
+      }
+
+      const isVerifiedResponderOrMod =
+        Boolean(bundle?.user.isModerator) ||
+        allResponders.some((resp) => resp.userId === uid && resp.verifiedResponder);
+      const isReportOwner = report.userId === uid;
+
+      if (verificationStatus === 'moderator_verified' && !isVerifiedResponderOrMod) {
+        return res.status(403).json({
+          error:
+            'Only verified community responders or moderators can mark a report as Moderator Verified.',
+        });
+      }
+
+      if (verificationStatus === 'resolved' && !isVerifiedResponderOrMod && !isReportOwner) {
+        return res.status(403).json({
+          error:
+            'Only the citizen who submitted this report or a verified moderator can mark it as Resolved.',
+        });
+      }
+
       const updated = await updateCommunityReportRecord(reportId, { verificationStatus });
       if (updated) {
         broadcastEvent('report:updated', updated);
@@ -1045,6 +1074,77 @@ async function startServer() {
     });
   });
 
+  // Tricity (Chandigarh, SAS Nagar Mohali, Panchkula, Kharar, Zirakpur, Landran, Gharuan) bounding box
+  const TRICITY_BOUNDS = {
+    minLat: 30.55,
+    maxLat: 30.88,
+    minLng: 76.50,
+    maxLng: 76.95,
+  };
+
+  function isWithinTricityBounds(lat: number, lng: number): boolean {
+    return (
+      !Number.isNaN(lat) &&
+      !Number.isNaN(lng) &&
+      lat >= TRICITY_BOUNDS.minLat &&
+      lat <= TRICITY_BOUNDS.maxLat &&
+      lng >= TRICITY_BOUNDS.minLng &&
+      lng <= TRICITY_BOUNDS.maxLng
+    );
+  }
+
+  function scoreLocationMatch(itemName: string, itemType: string, rawQuery: string): number {
+    const norm = (s: string) =>
+      s
+        .toLowerCase()
+        .replace(/[,()\-/._]/g, ' ')
+        .replace(/\s+/g, ' ')
+        .trim();
+    const q = norm(rawQuery);
+    const name = norm(itemName);
+    let score = 0;
+
+    // Exact sector or phase number matching (e.g., "sector 22", "phase 8")
+    const sectorMatch = q.match(/\bsector\s+(\d+[a-d]?)\b/i);
+    if (sectorMatch) {
+      const targetSec = sectorMatch[1].toLowerCase();
+      const exactRegex = new RegExp(`\\bsector\\s+${targetSec}\\b`, 'i');
+      if (exactRegex.test(name)) {
+        score += 120;
+      } else {
+        score -= 80;
+      }
+    }
+
+    const phaseMatch = q.match(/\bphase\s+(\d+[a-z0-9]*)\b/i);
+    if (phaseMatch) {
+      const targetPhase = phaseMatch[1].toLowerCase();
+      const exactPhaseRegex = new RegExp(`\\bphase\\s+${targetPhase}\\b`, 'i');
+      if (exactPhaseRegex.test(name)) {
+        score += 120;
+      } else {
+        score -= 80;
+      }
+    }
+
+    // City specificity check
+    if (q.includes('chandigarh') && name.includes('chandigarh')) score += 35;
+    if (q.includes('mohali') && (name.includes('mohali') || name.includes('sas nagar'))) score += 35;
+
+    if (name === q) score += 90;
+    else if (name.startsWith(q)) score += 65;
+    else if (name.includes(q)) score += 30;
+
+    // Prefer specific places/sectors over broad administrative centroids
+    if (itemType === 'administrative' || itemType === 'city' || itemType === 'state') {
+      score -= 25;
+    } else {
+      score += 15;
+    }
+
+    return score;
+  }
+
   app.get('/api/gis/search', async (req, res) => {
     const q = String(req.query.q || '').trim();
     if (!q) {
@@ -1057,31 +1157,41 @@ async function startServer() {
       return res.json({ results: cached.results, cached: true });
     }
 
-    const localGazetteerMatches = CHANDIGARH_MOHALI_GAZETTEER.filter((g) =>
-      g.name.toLowerCase().includes(qLower)
-    );
+    const qTokens = qLower
+      .replace(/[,()-]/g, ' ')
+      .split(/\s+/)
+      .filter((t) => t.length > 0);
 
-    const localPoiMatches = VERIFIED_CHANDIGARH_MOHALI_POIS.filter(
-      (p) =>
-        p.name.toLowerCase().includes(qLower) ||
-        (p.address && p.address.toLowerCase().includes(qLower))
-    ).map((p) => ({
+    const localGazetteerMatches = CHANDIGARH_MOHALI_GAZETTEER.filter((g) => {
+      const gLower = g.name.toLowerCase();
+      return gLower.includes(qLower) || qTokens.every((tok) => gLower.includes(tok));
+    }).map((g) => ({
+      ...g,
+      source: 'Chandigarh/Mohali Gazetteer',
+    }));
+
+    const localPoiMatches = VERIFIED_CHANDIGARH_MOHALI_POIS.filter((p) => {
+      const combinedText = `${p.name} ${p.address || ''}`.toLowerCase();
+      return combinedText.includes(qLower) || qTokens.every((tok) => combinedText.includes(tok));
+    }).map((p) => ({
       id: p.id,
       name: `${p.name} (${p.address || 'Chandigarh/Mohali'})`,
       latitude: p.latitude,
       longitude: p.longitude,
       type: p.category,
+      source: 'Chandigarh/Mohali Gazetteer',
     }));
 
     try {
       const searchQuery =
         qLower.includes('chandigarh') || qLower.includes('mohali') || qLower.includes('kharar')
           ? q
-          : `${q}, Chandigarh Mohali Punjab India`;
+          : `${q}, Chandigarh`;
 
+      // Viewbox bounded to Chandigarh & Mohali Tricity: left=76.50, top=30.88, right=76.95, bottom=30.55
       const url = `https://nominatim.openstreetmap.org/search?format=json&q=${encodeURIComponent(
         searchQuery
-      )}&limit=6&addressdetails=1`;
+      )}&limit=8&addressdetails=1&countrycodes=in&viewbox=76.50,30.88,76.95,30.55&bounded=1`;
 
       const controller = new AbortController();
       const timer = setTimeout(() => controller.abort(), 5000);
@@ -1104,17 +1214,28 @@ async function startServer() {
         lat: string;
         lon: string;
         type?: string;
+        class?: string;
       }>;
 
-      const remoteResults = data.map((item) => ({
-        id: String(item.place_id),
-        name: item.display_name,
-        latitude: parseFloat(item.lat),
-        longitude: parseFloat(item.lon),
-        type: item.type || 'location',
-      }));
+      const remoteResults = data
+        .map((item) => ({
+          id: String(item.place_id),
+          name: item.display_name,
+          latitude: parseFloat(item.lat),
+          longitude: parseFloat(item.lon),
+          type: item.type || item.class || 'location',
+          source: 'Nominatim OSM',
+        }))
+        .filter((item) => isWithinTricityBounds(item.latitude, item.longitude));
 
-      const combined = [...localGazetteerMatches, ...remoteResults, ...localPoiMatches];
+      const combined = [...localGazetteerMatches, ...localPoiMatches, ...remoteResults]
+        .filter((item) => isWithinTricityBounds(item.latitude, item.longitude))
+        .map((item) => ({
+          ...item,
+          matchScore: scoreLocationMatch(item.name, item.type, q),
+        }))
+        .sort((a, b) => b.matchScore - a.matchScore);
+
       const deduped: typeof combined = [];
       for (const item of combined) {
         if (
@@ -1125,7 +1246,7 @@ async function startServer() {
                 existing.longitude,
                 item.latitude,
                 item.longitude
-              ) < 0.15
+              ) < 0.12
           )
         ) {
           deduped.push(item);
@@ -1140,7 +1261,14 @@ async function startServer() {
 
       res.json({ results: finalResults });
     } catch {
-      const fallback = [...localGazetteerMatches, ...localPoiMatches].slice(0, 8);
+      const fallback = [...localGazetteerMatches, ...localPoiMatches]
+        .filter((item) => isWithinTricityBounds(item.latitude, item.longitude))
+        .map((item) => ({
+          ...item,
+          matchScore: scoreLocationMatch(item.name, item.type, q),
+        }))
+        .sort((a, b) => b.matchScore - a.matchScore)
+        .slice(0, 8);
       res.json({ results: fallback });
     }
   });
@@ -1173,6 +1301,12 @@ async function startServer() {
       weights,
     } = params;
 
+    // Validate coordinates: auto-correct if [lng, lat] were accidentally swapped
+    const normStartLat = startLat > 60 && startLng < 45 ? startLng : startLat;
+    const normStartLng = startLat > 60 && startLng < 45 ? startLat : startLng;
+    const normEndLat = endLat > 60 && endLng < 45 ? endLng : endLat;
+    const normEndLng = endLat > 60 && endLng < 45 ? endLat : endLng;
+
     const rawWeights = weights || {
       establishments: 30,
       mainRoads: 25,
@@ -1196,10 +1330,11 @@ async function startServer() {
     };
 
     const cacheKey = [
-      startLat.toFixed(4),
-      startLng.toFixed(4),
-      endLat.toFixed(4),
-      endLng.toFixed(4),
+      'v3',
+      normStartLat.toFixed(4),
+      normStartLng.toFixed(4),
+      normEndLat.toFixed(4),
+      normEndLng.toFixed(4),
       mode,
       isNightJourney ? 'night' : 'day',
       Object.values(normWeights).join('-'),
@@ -1223,20 +1358,21 @@ async function startServer() {
     const fallbackProfile = mode === 'foot' ? 'foot' : mode === 'bike' ? 'bike' : 'driving';
 
     interface OsrmRouteRaw {
-      distance: number;
-      duration: number;
-      geometry: { coordinates: [number, number][] };
+      distance: number; // meters
+      duration: number; // seconds
+      geometry: { coordinates: [number, number][] }; // [lng, lat]
       legs?: Array<{
         summary?: string;
         steps?: Array<{ name?: string; distance?: number }>;
       }>;
+      resolvedProfile?: TravelMode;
     }
 
     async function fetchOsrmCoordinates(coordString: string): Promise<OsrmRouteRaw[]> {
       const primaryUrl = `https://routing.openstreetmap.de/${deServerSubpath}/${coordString}?overview=full&geometries=geojson&alternatives=true&steps=true`;
       const fallbackUrl = `https://router.project-osrm.org/route/v1/${fallbackProfile}/${coordString}?overview=full&geometries=geojson&alternatives=true&steps=true`;
 
-      for (const url of [primaryUrl, fallbackUrl]) {
+      for (const [idx, url] of [primaryUrl, fallbackUrl].entries()) {
         try {
           const ctrl = new AbortController();
           const timer = setTimeout(() => ctrl.abort(), 5500);
@@ -1245,7 +1381,13 @@ async function startServer() {
           if (resp.ok) {
             const json = (await resp.json()) as { routes?: OsrmRouteRaw[] };
             if (json.routes && json.routes.length > 0) {
-              return json.routes;
+              // Note: routing.openstreetmap.de returns native duration for foot/bike/car in seconds.
+              // router.project-osrm.org demo server only runs a car profile even on /foot or /bike URLs.
+              const isNativeModeServer = idx === 0;
+              return json.routes.map((r) => ({
+                ...r,
+                resolvedProfile: isNativeModeServer ? mode : 'car',
+              }));
             }
           }
         } catch {
@@ -1255,8 +1397,8 @@ async function startServer() {
       return [];
     }
 
-    const midLat = (startLat + endLat) / 2;
-    const midLng = (startLng + endLng) / 2;
+    const midLat = (normStartLat + normEndLat) / 2;
+    const midLng = (normStartLng + normEndLng) / 2;
 
     const activityWaypoints = [
       { name: 'Sector 17 Plaza & Madhya Marg Corridor', lat: 30.7411, lng: 76.7834 },
@@ -1272,11 +1414,16 @@ async function startServer() {
         haversineDistanceKm(midLat, midLng, b.lat, b.lng)
     );
     const chosenHub = activityWaypoints[0];
+    const secondaryHub = activityWaypoints[1];
 
-    const [directRoutes, hubRoutes] = await Promise.all([
-      fetchOsrmCoordinates(`${startLng},${startLat};${endLng},${endLat}`),
+    // OSRM requires {longitude},{latitude}
+    const [directRoutes, hubRoutes, secondaryHubRoutes] = await Promise.all([
+      fetchOsrmCoordinates(`${normStartLng},${normStartLat};${normEndLng},${normEndLat}`),
       fetchOsrmCoordinates(
-        `${startLng},${startLat};${chosenHub.lng},${chosenHub.lat};${endLng},${endLat}`
+        `${normStartLng},${normStartLat};${chosenHub.lng},${chosenHub.lat};${normEndLng},${normEndLat}`
+      ),
+      fetchOsrmCoordinates(
+        `${normStartLng},${normStartLat};${secondaryHub.lng},${secondaryHub.lat};${normEndLng},${normEndLat}`
       ),
     ]);
 
@@ -1290,14 +1437,20 @@ async function startServer() {
       recommendationReason: string
     ): SmartRouteOption {
       const coords = raw.geometry.coordinates;
-      const distanceMeters = raw.distance;
+      // OSRM distance is in meters
+      const distanceMeters = Math.max(1, Math.round(raw.distance));
 
-      // Mode-realistic travel duration
-      const speedKmh = mode === 'foot' ? 4.8 : mode === 'bike' ? 16.5 : 34;
+      // OSRM duration is in seconds.
+      // Use native OSRM duration when the routing server supports the selected profile natively;
+      // only convert from distance when falling back to the car-only demo server for foot/bike.
+      const fallbackSpeedKmh = mode === 'foot' ? 4.8 : mode === 'bike' ? 16.5 : 34;
+      const rawDurationSeconds = Number(raw.duration) || 0;
       const modeDurationSeconds =
-        mode === 'car'
-          ? raw.duration
-          : Math.max(60, Math.round((distanceMeters / 1000 / speedKmh) * 3600));
+        raw.resolvedProfile === mode && rawDurationSeconds > 0
+          ? Math.max(60, Math.round(rawDurationSeconds))
+          : mode === 'car' && rawDurationSeconds > 0
+          ? Math.max(60, Math.round(rawDurationSeconds))
+          : Math.max(60, Math.round((distanceMeters / 1000 / fallbackSpeedKmh) * 3600));
 
       // Extract road summary & calculate main-road coverage percentage from steps
       const legSummaries = (raw.legs || [])
@@ -1350,7 +1503,7 @@ async function startServer() {
           ? `Arterial Corridor via ${chosenHub.name}`
           : 'Chandigarh / Mohali Primary Sector Network');
 
-      // Sample points along route polyline to find facilities within 600m corridor
+      // Sample points along route polyline to find facilities within 650m corridor
       const sampleStep = Math.max(1, Math.floor(coords.length / 40));
       const sampled = coords.filter((_, idx) => idx % sampleStep === 0 || idx === coords.length - 1);
 
@@ -1456,7 +1609,6 @@ async function startServer() {
       }
 
       // Transparent Night Activity Scoring (Part 7 & Part 9)
-      // Never assigns 0 to infrastructure merely because OSM lacks every individual pole tag
       const nightCommercialFactor = isNightJourney ? 0.82 : 1.0;
       const totalCommercialAnd24x7 =
         Math.round(counts.activeEstablishments * nightCommercialFactor) +
@@ -1517,8 +1669,8 @@ async function startServer() {
         tagline,
         recommendationReason,
         isRecommended,
-        distanceMeters: Math.round(distanceMeters),
-        durationSeconds: Math.round(modeDurationSeconds),
+        distanceMeters,
+        durationSeconds: modeDurationSeconds,
         transportMode: mode,
         isNightJourney,
         departureTime,
@@ -1594,10 +1746,20 @@ async function startServer() {
       const isDuplicate = distinctRawRoutes.some(
         (existing) => Math.abs(existing.raw.distance - hubCandidate.distance) < 220
       );
-      // Only include hub route if it isn't an unreasonable detour (> 1.65x direct distance)
       const directDist = directRoutes[0]?.distance || hubCandidate.distance;
-      if (!isDuplicate && hubCandidate.distance <= directDist * 1.65) {
+      if (!isDuplicate && hubCandidate.distance <= directDist * 1.75) {
         distinctRawRoutes.push({ raw: hubCandidate, sourceTag: 'hub' });
+      }
+    }
+
+    if (distinctRawRoutes.length < 3 && secondaryHubRoutes.length > 0) {
+      const secCandidate = secondaryHubRoutes[0];
+      const isDuplicate = distinctRawRoutes.some(
+        (existing) => Math.abs(existing.raw.distance - secCandidate.distance) < 220
+      );
+      const directDist = directRoutes[0]?.distance || secCandidate.distance;
+      if (!isDuplicate && secCandidate.distance <= directDist * 1.85) {
+        distinctRawRoutes.push({ raw: secCandidate, sourceTag: 'hub' });
       }
     }
 
@@ -1621,83 +1783,156 @@ async function startServer() {
       )
     );
 
-    // Identify Fastest (minimum duration) and Higher Activity (maximum Night Activity Score)
-    const fastestIdx = prelimEvaluated.reduce(
-      (best, cur, idx, arr) => (cur.durationSeconds < arr[best].durationSeconds ? idx : best),
-      0
-    );
+    // ========================================================================
+    // STRICT ROUTE CLASSIFICATION SEPARATED FROM ROUTE SCORING
+    // Rule 1: FASTEST must strictly have the minimum actual durationSeconds
+    //         across ALL valid alternatives returned by OSRM.
+    // ========================================================================
+    let fastestIdx = 0;
+    for (let i = 1; i < prelimEvaluated.length; i++) {
+      if (prelimEvaluated[i].durationSeconds < prelimEvaluated[fastestIdx].durationSeconds) {
+        fastestIdx = i;
+      } else if (
+        prelimEvaluated[i].durationSeconds === prelimEvaluated[fastestIdx].durationSeconds &&
+        prelimEvaluated[i].distanceMeters < prelimEvaluated[fastestIdx].distanceMeters
+      ) {
+        fastestIdx = i;
+      }
+    }
 
-    const highestActivityIdx = prelimEvaluated.reduce(
-      (best, cur, idx, arr) =>
-        (cur.nightActivity.overallScore ?? 0) > (arr[best].nightActivity.overallScore ?? 0)
-          ? idx
-          : best,
-      0
-    );
+    // Rule 2: SAFEST / RECOMMENDED is selected based on documented emergency facilities,
+    //         infrastructure, main-road share, help-point gap, and data confidence.
+    function computeSafetyComposite(r: SmartRouteOption): number {
+      return (
+        r.nightActivity.factors.emergencyScore * 0.3 +
+        r.nightActivity.factors.streetlightScore * 0.25 +
+        r.mainRoadCoveragePercent * 0.25 +
+        r.nightActivity.confidencePercentage * 0.2 -
+        r.longestGapBetweenHelpPointsKm * 4
+      );
+    }
 
-    // Choose Recommended route: balances high Night Activity Score, main-road coverage, and travel time
-    const recommendedIdx = prelimEvaluated.reduce((best, cur, idx, arr) => {
-      const curComposite =
-        (cur.nightActivity.overallScore ?? 50) * 0.65 +
-        cur.mainRoadCoveragePercent * 0.25 -
-        (cur.durationSeconds / 60) * 0.35;
-      const bestComposite =
-        (arr[best].nightActivity.overallScore ?? 50) * 0.65 +
-        arr[best].mainRoadCoveragePercent * 0.25 -
-        (arr[best].durationSeconds / 60) * 0.35;
-      return curComposite > bestComposite ? idx : best;
-    }, 0);
+    // Rule 3: HIGHER ACTIVITY is selected based on documented commercial activity & open places.
+    function computeActivityComposite(r: SmartRouteOption): number {
+      return (
+        r.nightActivity.factors.establishmentsCount * 10 +
+        r.nightActivity.factors.establishmentsScore * 0.5 +
+        r.documentedHelpPointsCount * 5
+      );
+    }
 
     const finalRoutes: SmartRouteOption[] = [];
 
-    // 1. Recommended Route
-    const recRaw = distinctRawRoutes[recommendedIdx].raw;
-    const recEval = evaluateSingleRoute(
-      'route-recommended',
-      'recommended',
-      'Recommended',
-      `Optimal balance of documented corridor activity and ${mode} travel time`,
-      recRaw,
-      true,
-      `Recommended because it maintains ${prelimEvaluated[recommendedIdx].mainRoadCoveragePercent}% primary road coverage with ${prelimEvaluated[recommendedIdx].documentedHelpPointsCount} documented help points and a max help-point gap of ${prelimEvaluated[recommendedIdx].longestGapBetweenHelpPointsKm} km.`
-    );
-    finalRoutes.push(recEval);
+    if (distinctRawRoutes.length === 1) {
+      // Only 1 genuine road-network route exists
+      const onlyEval = evaluateSingleRoute(
+        'route-recommended',
+        'recommended',
+        'Safest & Fastest Route',
+        `Direct ${mode} corridor with ${prelimEvaluated[0].documentedHelpPointsCount} documented help points`,
+        distinctRawRoutes[0].raw,
+        true,
+        `Primary road-network corridor (${prelimEvaluated[0].mainRoadCoveragePercent}% main road share, ${prelimEvaluated[0].documentedHelpPointsCount} documented help points).`
+      );
+      finalRoutes.push(onlyEval);
+    } else {
+      // Multiple genuine alternatives exist.
+      // Fastest is locked to `fastestIdx` so fastestRoute.durationSeconds <= everyOtherRoute.durationSeconds ALWAYS holds!
+      const nonFastestIndices = prelimEvaluated
+        .map((_, idx) => idx)
+        .filter((idx) => idx !== fastestIdx);
 
-    // 2. Fastest Route (if different from Recommended, or as 2nd card if distinct alternatives exist)
-    const otherIndices = distinctRawRoutes
-      .map((_, idx) => idx)
-      .filter((idx) => idx !== recommendedIdx);
+      // Pick Safest / Recommended among the remaining alternatives, or if a non-fastest route
+      // has higher safety/activity, assign it as Recommended while Fastest remains `fastestIdx`.
+      let recommendedIdx = nonFastestIndices[0];
+      for (const idx of nonFastestIndices) {
+        if (
+          computeSafetyComposite(prelimEvaluated[idx]) >
+          computeSafetyComposite(prelimEvaluated[recommendedIdx])
+        ) {
+          recommendedIdx = idx;
+        }
+      }
 
-    if (otherIndices.length > 0) {
-      const fIdx = otherIndices.includes(fastestIdx) ? fastestIdx : otherIndices[0];
-      const fastRaw = distinctRawRoutes[fIdx].raw;
+      // Build Safest / Recommended Route card
+      const recRaw = distinctRawRoutes[recommendedIdx].raw;
+      const recEval = evaluateSingleRoute(
+        'route-recommended',
+        'recommended',
+        'Safest route',
+        `Optimal documented emergency & infrastructure coverage for ${mode}`,
+        recRaw,
+        true,
+        `Selected for ${prelimEvaluated[recommendedIdx].mainRoadCoveragePercent}% primary road share, ${prelimEvaluated[recommendedIdx].documentedHelpPointsCount} documented help points, and ${prelimEvaluated[recommendedIdx].nightActivity.confidencePercentage}% data confidence.`
+      );
+      finalRoutes.push(recEval);
+
+      // Build Fastest Route card (strictly `fastestIdx` — guaranteed lowest durationSeconds)
+      const fastRaw = distinctRawRoutes[fastestIdx].raw;
       const fastEval = evaluateSingleRoute(
         'route-fastest',
         'fastest',
-        'Fastest',
-        'Shortest travel time along direct road connectors',
+        'Fastest route',
+        'Lowest actual estimated travel duration',
         fastRaw,
         false,
-        `Shortest estimated ${mode} travel duration (${Math.max(
+        `Lowest actual ${mode} travel duration (${Math.max(
           1,
-          Math.round(prelimEvaluated[fIdx].durationSeconds / 60)
-        )} min) across ${prelimEvaluated[fIdx].summaryRoads}.`
+          Math.round(prelimEvaluated[fastestIdx].durationSeconds / 60)
+        )} min) across ${prelimEvaluated[fastestIdx].summaryRoads}.`
       );
       finalRoutes.push(fastEval);
 
-      const remainingIdx = otherIndices.find((idx) => idx !== fIdx);
-      if (remainingIdx !== undefined) {
-        const actRaw = distinctRawRoutes[remainingIdx].raw;
+      // Build Higher Activity Route card if a 3rd genuine alternative exists
+      const remainingIndices = nonFastestIndices.filter((idx) => idx !== recommendedIdx);
+      if (remainingIndices.length > 0) {
+        let actIdx = remainingIndices[0];
+        for (const idx of remainingIndices) {
+          if (
+            computeActivityComposite(prelimEvaluated[idx]) >
+            computeActivityComposite(prelimEvaluated[actIdx])
+          ) {
+            actIdx = idx;
+          }
+        }
+
+        const actRaw = distinctRawRoutes[actIdx].raw;
         const actEval = evaluateSingleRoute(
           'route-higher-activity',
           'higher_activity',
-          'Higher Activity',
-          `Prioritises commercial and emergency density via ${chosenHub.name}`,
+          'Higher activity route',
+          `Prioritises documented commercial & emergency density`,
           actRaw,
           false,
-          `Routes through ${chosenHub.name} with ${prelimEvaluated[remainingIdx].documentedHelpPointsCount} documented emergency/help facilities along the corridor.`
+          `Includes ${prelimEvaluated[actIdx].nightActivity.factors.establishmentsCount} documented commercial/24x7 places and ${prelimEvaluated[actIdx].documentedHelpPointsCount} help points along ${prelimEvaluated[actIdx].summaryRoads}.`
         );
         finalRoutes.push(actEval);
+      }
+    }
+
+    // Final invariant verification: fastestRoute.durationSeconds <= everyOtherRoute.durationSeconds
+    const verifiedFastest = finalRoutes.find((r) => r.type === 'fastest');
+    if (verifiedFastest) {
+      const minDur = Math.min(...finalRoutes.map((r) => r.durationSeconds));
+      if (verifiedFastest.durationSeconds > minDur) {
+        // Swap classification if any other route has strictly shorter duration
+        const actualMinRoute = finalRoutes.find((r) => r.durationSeconds === minDur);
+        if (actualMinRoute && actualMinRoute.id !== verifiedFastest.id) {
+          const prevType = actualMinRoute.type;
+          const prevLabel = actualMinRoute.label;
+          const prevId = actualMinRoute.id;
+          const prevRec = actualMinRoute.isRecommended;
+
+          actualMinRoute.type = 'fastest';
+          actualMinRoute.label = 'Fastest route';
+          actualMinRoute.id = 'route-fastest';
+          actualMinRoute.isRecommended = false;
+
+          verifiedFastest.type = prevType;
+          verifiedFastest.label = prevLabel;
+          verifiedFastest.id = prevId;
+          verifiedFastest.isRecommended = prevRec;
+        }
       }
     }
 
@@ -1835,217 +2070,6 @@ async function startServer() {
       console.error('Open-Meteo error:', err);
       res.status(503).json({
         error: 'Open-Meteo weather service temporarily unreachable.',
-      });
-    }
-  });
-
-  // ==========================================================================
-  // 7. GEMINI AI CITY INTELLIGENCE ASSISTANT (SERVER-SIDE WITH REAL TOOL DATA)
-  // ==========================================================================
-
-  app.post('/api/ai/assistant', requireAuth, async (req: AuthRequest, res) => {
-    try {
-      const apiKey = process.env.GEMINI_API_KEY;
-      if (!apiKey) {
-        return res.status(503).json({
-          error:
-            'Gemini API key is not configured. Please check Settings > Secrets in AI Studio.',
-        });
-      }
-
-      const {
-        prompt,
-        history = [],
-        userLocation,
-        selectedRouteSummary,
-      } = req.body as {
-        prompt?: string;
-        history?: Array<{ role: 'user' | 'assistant'; content: string }>;
-        userLocation?: { lat: number; lng: number };
-        selectedRouteSummary?: string;
-      };
-
-      if (!prompt || !prompt.trim()) {
-        return res
-          .status(400)
-          .json({ error: 'Please enter a question for the City Intelligence Assistant.' });
-      }
-
-      const lat = userLocation?.lat ?? 30.7333;
-      const lng = userLocation?.lng ?? 76.7794;
-
-      const [pois, allReports] = await Promise.all([
-        fetchLiveOverpassPois(),
-        getAllCommunityReports(),
-      ]);
-
-      // Check if the user prompt mentions a route between two places in our gazetteer
-      const pLower = prompt.toLowerCase();
-      let liveCalculatedRouteContext = '';
-
-      const matchedPlaces = CHANDIGARH_MOHALI_GAZETTEER.filter((g) => {
-        const shortName = g.name.split('(')[0].trim().toLowerCase();
-        return (
-          pLower.includes(shortName) ||
-          (shortName.includes('cgc') && pLower.includes('cgc')) ||
-          (shortName.includes('railway') && pLower.includes('railway')) ||
-          (shortName.includes('elante') && pLower.includes('elante')) ||
-          (shortName.includes('sukhna') && pLower.includes('sukhna')) ||
-          (shortName.includes('chandigarh university') && pLower.includes('chandigarh university')) ||
-          (shortName.includes('airport') && pLower.includes('airport'))
-        );
-      });
-
-      if (matchedPlaces.length >= 2) {
-        const origin = matchedPlaces[0];
-        const dest = matchedPlaces[1];
-        const isNightMentioned =
-          pLower.includes('10 pm') ||
-          pLower.includes('night') ||
-          pLower.includes('22:00') ||
-          pLower.includes('late');
-
-        const routeRes = await computeSmartRoutesForCorridor({
-          startLat: origin.latitude,
-          startLng: origin.longitude,
-          endLat: dest.latitude,
-          endLng: dest.longitude,
-          mode: pLower.includes('walk') ? 'foot' : pLower.includes('cycl') ? 'bike' : 'car',
-          isNightJourney: isNightMentioned,
-          departureTime: isNightMentioned ? '22:00' : '18:00',
-        });
-
-        liveCalculatedRouteContext = `\nLIVE OSRM CALCULATED ROUTES FOR "${origin.name}" TO "${dest.name}":\n${JSON.stringify(
-          routeRes.routes.map((r) => ({
-            category: r.label,
-            isRecommended: r.isRecommended,
-            recommendationReason: r.recommendationReason,
-            distanceKm: (r.distanceMeters / 1000).toFixed(1),
-            estimatedMinutes: Math.round(r.durationSeconds / 60),
-            nightActivityScore: r.nightActivity.overallScore,
-            dataConfidencePercent: r.nightActivity.confidencePercentage,
-            mainRoadCoveragePercent: r.mainRoadCoveragePercent,
-            documentedHelpPoints: r.documentedHelpPointsCount,
-            longestGapBetweenHelpPointsKm: r.longestGapBetweenHelpPointsKm,
-            nearbyCounts: r.nearbyPoisCount,
-            summaryRoads: r.summaryRoads,
-          })),
-          null,
-          2
-        )}`;
-      }
-
-      const nearestPois = pois
-        .map((p) => ({
-          ...p,
-          distKm: Number(haversineDistanceKm(lat, lng, p.latitude, p.longitude).toFixed(2)),
-        }))
-        .sort((a, b) => a.distKm - b.distKm)
-        .slice(0, 16);
-
-      const recentReports = allReports.slice(0, 8);
-
-      const conversationHistoryText =
-        history.length > 0
-          ? `\nRECENT CONVERSATION CONTEXT:\n${history
-              .slice(-6)
-              .map((h) => `${h.role.toUpperCase()}: ${h.content}`)
-              .join('\n')}\n`
-          : '';
-
-      const systemContext = `You are the UrbanShield AI City Intelligence Assistant for Chandigarh and Mohali, India.
-You MUST adhere strictly to the following epistemic and data integrity rules:
-1. Ground every answer ONLY in the retrieved application data below (real OSRM routes, OpenStreetMap verified facilities, NCRB / Police Station historical crime summaries, and community incident reports).
-2. Explicitly distinguish between:
-   - VERIFIED OpenStreetMap / Smart City facilities
-   - HISTORICAL Police Station / District crime records (never present district-level aggregates as sector-level counts, and never equate historical FIR volume with current personal safety)
-   - USER-SUBMITTED community reports (noting verification status: pending, community_confirmed, moderator_verified)
-3. Explain missing data honestly: absent OSM streetlight or camera tags do NOT mean absent physical infrastructure.
-4. When discussing night travel (e.g., 10 PM / 22:00), explain how retail shop closures shift reliance onto 24/7 hospitals, police stations, 24/7 pharmacies, petrol pumps, and primary arterial lighting corridors (Madhya Marg, Dakshin Marg, Himalaya Marg, PR-7).
-5. NEVER claim a route is "100% safe". Use wording such as "More documented activity along this route."
-
-USER CURRENT COORDINATES: Latitude ${lat.toFixed(4)}, Longitude ${lng.toFixed(4)}
-ACTIVE ROUTE SELECTED IN UI:
-${selectedRouteSummary || 'No specific route currently selected in UI.'}
-${liveCalculatedRouteContext}
-
-NEAREST VERIFIED FACILITIES (OpenStreetMap / Public Registry):
-${JSON.stringify(
-  nearestPois.map((p) => ({
-    name: p.name,
-    category: p.category,
-    distanceKm: p.distKm,
-    address: p.address || 'Address not documented',
-    phone: p.phone || 'Phone not documented',
-    openingHours: p.openingHours || 'Hours not documented',
-    coverageNote: p.coverageNote,
-  })),
-  null,
-  2
-)}
-
-HISTORICAL CRIME INTELLIGENCE RECORDS (CHANDIGARH & MOHALI):
-${JSON.stringify(
-  HISTORICAL_CRIME_DATABASE.map((c) => ({
-    year: c.year,
-    district: c.district,
-    policeStation: c.policeStation,
-    sectorOrLocality: c.sectorOrLocality,
-    category: c.crimeCategory,
-    incidentCount: c.incidentCount,
-    granularity: c.geographicGranularity,
-    source: c.source,
-    notes: c.notes,
-  })),
-  null,
-  2
-)}
-
-RECENT COMMUNITY REPORTS:
-${JSON.stringify(
-  recentReports.map((r) => ({
-    title: r.title,
-    category: r.category,
-    location: r.locationLabel,
-    verificationStatus: r.verificationStatus,
-    confirmations: r.confirmationsCount,
-    description: r.description,
-  })),
-  null,
-  2
-)}
-${conversationHistoryText}`;
-
-      const ai = new GoogleGenAI({
-        apiKey,
-        httpOptions: {
-          headers: {
-            'User-Agent': 'aistudio-build',
-          },
-        },
-      });
-
-      const response = await ai.models.generateContent({
-        model: 'gemini-3.8-flash',
-        contents: prompt.trim(),
-        config: {
-          systemInstruction: systemContext,
-        },
-      });
-
-      res.json({
-        reply: response.text || 'Unable to generate a response from the retrieved city context.',
-        groundedFacilitiesCount: nearestPois.length,
-        groundedReportsCount: recentReports.length,
-        groundedCrimeRecordsCount: HISTORICAL_CRIME_DATABASE.length,
-        timestamp: new Date().toISOString(),
-      });
-    } catch (err: any) {
-      console.error('Gemini Assistant error:', err);
-      res.status(500).json({
-        error:
-          err?.message ||
-          'Failed to query the Gemini City Intelligence Assistant. Check your API key in Settings > Secrets.',
       });
     }
   });

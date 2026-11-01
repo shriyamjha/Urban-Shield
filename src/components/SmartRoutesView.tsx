@@ -1,6 +1,6 @@
 import React, { useState, useEffect, useRef } from 'react';
 import {
-  Navigation,
+  ArrowLeft,
   ArrowLeftRight,
   Clock,
   Footprints,
@@ -8,13 +8,13 @@ import {
   Car,
   Moon,
   Sun,
-  ChevronDown,
-  ChevronUp,
-  Sliders,
   Crosshair,
   Bookmark,
-  CheckCircle2,
-  AlertCircle,
+  Check,
+  MapPin,
+  Maximize2,
+  Minimize2,
+  SlidersHorizontal,
 } from 'lucide-react';
 import {
   CityPoi,
@@ -25,22 +25,23 @@ import {
   TravelMode,
 } from '../types/urbanshield.ts';
 import { ROUTE_PRESETS, CHANDIGARH_CENTER } from '../data/chandigarhMohaliBaseline.ts';
-import { HISTORICAL_CRIME_DATABASE } from '../data/historicalCrimeData.ts';
 import {
   calculateSmartRoutesCached,
+  ensureLatLngOrder,
   GeocodingSuggestion,
   getSavedLocations,
+  resolveLocationQuery,
   saveUserLocationBookmark,
   searchLocationsCached,
 } from '../services/gisClientService.ts';
 import { InteractiveCityMap } from './InteractiveCityMap.tsx';
+import { ExpandableDetails } from './ui/ProgressivePrimitives.tsx';
 
 interface SmartRoutesViewProps {
   userLocation: { lat: number; lng: number };
   pois: CityPoi[];
   reports: CommunityReport[];
   initialDestination?: CityPoi | null;
-  onActiveRouteChange?: (summary: string) => void;
 }
 
 export const SmartRoutesView: React.FC<SmartRoutesViewProps> = ({
@@ -48,48 +49,64 @@ export const SmartRoutesView: React.FC<SmartRoutesViewProps> = ({
   pois,
   reports,
   initialDestination,
-  onActiveRouteChange,
 }) => {
-  // Default to Test Journey #1: Chandigarh Railway Station -> CGC University Mohali
-  const [startName, setStartName] = useState(
-    'Chandigarh Junction Railway Station, Daria, Chandigarh'
-  );
-  const [startCoords, setStartCoords] = useState<{ lat: number; lng: number }>({
-    lat: 30.7019,
-    lng: 76.8219,
-  });
+  // Default to Test Case #1: Chandigarh Junction Railway Station -> Sector 22, Chandigarh
+  const defaultOriginName = 'Chandigarh Junction Railway Station, Daria, Chandigarh';
+  const defaultOriginCoords = { lat: 30.7019, lng: 76.8219 };
 
-  const [endName, setEndName] = useState(
-    initialDestination?.name || 'CGC University (Landran Campus), Sector 112, Mohali'
+  const defaultDestName =
+    initialDestination?.name || 'Sector 22, Chandigarh (Shastri Market / Aroma Point)';
+  const defaultDestCoords = {
+    lat: initialDestination?.latitude || 30.7336,
+    lng: initialDestination?.longitude || 76.7745,
+  };
+
+  const [startName, setStartName] = useState(defaultOriginName);
+  const [resolvedOriginName, setResolvedOriginName] = useState(defaultOriginName);
+  const [startCoords, setStartCoords] = useState<{ lat: number; lng: number }>(defaultOriginCoords);
+  const [originDirty, setOriginDirty] = useState(false);
+
+  const [endName, setEndName] = useState(defaultDestName);
+  const [originalUserDestInput, setOriginalUserDestInput] = useState(
+    initialDestination?.name || 'Sector 22, Chandigarh'
   );
-  const [endCoords, setEndCoords] = useState<{ lat: number; lng: number }>({
-    lat: initialDestination?.latitude || 30.6869,
-    lng: initialDestination?.longitude || 76.6634,
-  });
+  const [resolvedDestName, setResolvedDestName] = useState(defaultDestName);
+  const [endCoords, setEndCoords] = useState<{ lat: number; lng: number }>(defaultDestCoords);
+  const [finalRoutingDestCoords, setFinalRoutingDestCoords] = useState<{
+    lat: number;
+    lng: number;
+  }>(defaultDestCoords);
+  const [destDirty, setDestDirty] = useState(false);
+
+  // Ambiguous location clarification state
+  const [clarificationPrompt, setClarificationPrompt] = useState<{
+    field: 'origin' | 'dest';
+    query: string;
+    reason: string;
+    candidates: GeocodingSuggestion[];
+  } | null>(null);
 
   const [mode, setMode] = useState<TravelMode>('car');
   const [departureTime, setDepartureTime] = useState('22:00');
   const [isNightJourney, setIsNightJourney] = useState(true);
 
   const [routes, setRoutes] = useState<SmartRouteOption[]>([]);
-  const [routeNote, setRouteNote] = useState<string | undefined>(undefined);
   const [selectedRouteId, setSelectedRouteId] = useState<string>('route-recommended');
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
+
+  // Journey editor & full screen map toggles
+  const [isEditingJourney, setIsEditingJourney] = useState(false);
+  const [isMapFullScreen, setIsMapFullScreen] = useState(false);
 
   // Autocomplete states with debouncing
   const [originSuggestions, setOriginSuggestions] = useState<GeocodingSuggestion[]>([]);
   const [destSuggestions, setDestSuggestions] = useState<GeocodingSuggestion[]>([]);
   const [activeAutocomplete, setActiveAutocomplete] = useState<'origin' | 'dest' | null>(null);
-  const [searchingGeocode, setSearchingGeocode] = useState(false);
+  const [, setSearchingGeocode] = useState(false);
+  const [, setSavedLocations] = useState<SavedLocation[]>(() => getSavedLocations());
 
-  // Map overlay toggles on Smart Routes map
-  const [showCrimeOverlay, setShowCrimeOverlay] = useState(false);
-  const [detailsExpanded, setDetailsExpanded] = useState(true);
-  const [showWeightsModal, setShowWeightsModal] = useState(false);
-  const [savedLocations, setSavedLocations] = useState<SavedLocation[]>(() => getSavedLocations());
-
-  const [weights, setWeights] = useState({
+  const [weights] = useState({
     establishments: 30,
     mainRoads: 25,
     emergencyServices: 20,
@@ -101,11 +118,13 @@ export const SmartRoutesView: React.FC<SmartRoutesViewProps> = ({
 
   useEffect(() => {
     if (initialDestination) {
+      const norm = ensureLatLngOrder(initialDestination.latitude, initialDestination.longitude);
       setEndName(initialDestination.name);
-      setEndCoords({
-        lat: initialDestination.latitude,
-        lng: initialDestination.longitude,
-      });
+      setOriginalUserDestInput(initialDestination.name);
+      setResolvedDestName(initialDestination.name);
+      setEndCoords({ lat: norm.lat, lng: norm.lng });
+      setFinalRoutingDestCoords({ lat: norm.lat, lng: norm.lng });
+      setDestDirty(false);
     }
   }, [initialDestination]);
 
@@ -118,7 +137,7 @@ export const SmartRoutesView: React.FC<SmartRoutesViewProps> = ({
       const results = await searchLocationsCached(startName, ctrl.signal);
       setOriginSuggestions(results);
       setSearchingGeocode(false);
-    }, 320);
+    }, 220);
 
     return () => {
       clearTimeout(timer);
@@ -135,7 +154,7 @@ export const SmartRoutesView: React.FC<SmartRoutesViewProps> = ({
       const results = await searchLocationsCached(endName, ctrl.signal);
       setDestSuggestions(results);
       setSearchingGeocode(false);
-    }, 320);
+    }, 220);
 
     return () => {
       clearTimeout(timer);
@@ -143,24 +162,44 @@ export const SmartRoutesView: React.FC<SmartRoutesViewProps> = ({
     };
   }, [endName, activeAutocomplete]);
 
-  const executeRouteCalculation = async () => {
+  const executeRouteCalculation = async (
+    overrideOrigin?: { name: string; lat: number; lng: number },
+    overrideDest?: { name: string; lat: number; lng: number }
+  ) => {
     if (routeAbortRef.current) {
       routeAbortRef.current.abort();
     }
     const ctrl = new AbortController();
     routeAbortRef.current = ctrl;
 
+    const rawOrig = overrideOrigin || {
+      name: resolvedOriginName,
+      lat: startCoords.lat,
+      lng: startCoords.lng,
+    };
+    const rawDest = overrideDest || {
+      name: resolvedDestName,
+      lat: endCoords.lat,
+      lng: endCoords.lng,
+    };
+
+    const normOrig = ensureLatLngOrder(rawOrig.lat, rawOrig.lng);
+    const normDest = ensureLatLngOrder(rawDest.lat, rawDest.lng);
+
+    // Record exact final routing destination coordinates for the diagnostic and map marker
+    setFinalRoutingDestCoords({ lat: normDest.lat, lng: normDest.lng });
+
     setLoading(true);
     setError(null);
     try {
       const res = await calculateSmartRoutesCached(
         {
-          startLat: startCoords.lat,
-          startLng: startCoords.lng,
-          endLat: endCoords.lat,
-          endLng: endCoords.lng,
-          startName,
-          endName,
+          startLat: normOrig.lat,
+          startLng: normOrig.lng,
+          endLat: normDest.lat,
+          endLng: normDest.lng,
+          startName: rawOrig.name,
+          endName: rawDest.name,
           mode,
           departureTime,
           isNightJourney,
@@ -170,24 +209,10 @@ export const SmartRoutesView: React.FC<SmartRoutesViewProps> = ({
       );
 
       setRoutes(res.routes);
-      setRouteNote(res.note);
 
       if (res.routes.length > 0) {
         const rec = res.routes.find((r) => r.isRecommended) || res.routes[0];
         setSelectedRouteId(rec.id);
-        if (onActiveRouteChange) {
-          onActiveRouteChange(
-            `${startName} → ${endName} [${mode.toUpperCase()}, ${
-              isNightJourney ? 'Night' : 'Day'
-            } ${departureTime}]: ${rec.label} (${(rec.distanceMeters / 1000).toFixed(
-              1
-            )} km, ~${Math.round(rec.durationSeconds / 60)} min, Night Activity Score: ${
-              rec.nightActivity.overallScore ?? 'Insufficient data'
-            }/100, Help Points: ${rec.documentedHelpPointsCount}, Max Gap: ${
-              rec.longestGapBetweenHelpPointsKm
-            } km)`
-          );
-        }
       }
     } catch (err: any) {
       if (err?.name !== 'AbortError') {
@@ -196,6 +221,90 @@ export const SmartRoutesView: React.FC<SmartRoutesViewProps> = ({
     } finally {
       setLoading(false);
     }
+  };
+
+  /**
+   * Resolves any user-typed origin/destination text that has not yet been selected
+   * from autocomplete so stale coordinates from previous searches are NEVER reused.
+   */
+  const resolveAndApplyJourneyInputs = async () => {
+    setError(null);
+    setClarificationPrompt(null);
+
+    let nextOrigin = {
+      name: resolvedOriginName,
+      lat: startCoords.lat,
+      lng: startCoords.lng,
+    };
+    let nextDest = {
+      name: resolvedDestName,
+      lat: endCoords.lat,
+      lng: endCoords.lng,
+    };
+
+    if (originDirty) {
+      const resOrig = await resolveLocationQuery(startName);
+      if (resOrig.status === 'not_found') {
+        setError(resOrig.reason || `Origin "${startName}" could not be verified.`);
+        return;
+      }
+      if (resOrig.status === 'ambiguous') {
+        setClarificationPrompt({
+          field: 'origin',
+          query: startName,
+          reason: resOrig.reason || 'Multiple origin locations match. Please clarify:',
+          candidates: resOrig.candidates,
+        });
+        return;
+      }
+      if (resOrig.resolved) {
+        const norm = ensureLatLngOrder(resOrig.resolved.latitude, resOrig.resolved.longitude);
+        nextOrigin = {
+          name: resOrig.resolved.name,
+          lat: norm.lat,
+          lng: norm.lng,
+        };
+        setStartName(resOrig.resolved.name);
+        setResolvedOriginName(resOrig.resolved.name);
+        setStartCoords({ lat: norm.lat, lng: norm.lng });
+        setOriginDirty(false);
+      }
+    }
+
+    if (destDirty) {
+      const userEnteredDest = endName.trim();
+      setOriginalUserDestInput(userEnteredDest);
+      const resDest = await resolveLocationQuery(userEnteredDest);
+      if (resDest.status === 'not_found') {
+        setError(resDest.reason || `Destination "${userEnteredDest}" could not be verified.`);
+        return;
+      }
+      if (resDest.status === 'ambiguous') {
+        setClarificationPrompt({
+          field: 'dest',
+          query: userEnteredDest,
+          reason: resDest.reason || 'Multiple destination locations match. Please clarify:',
+          candidates: resDest.candidates,
+        });
+        return;
+      }
+      if (resDest.resolved) {
+        const norm = ensureLatLngOrder(resDest.resolved.latitude, resDest.resolved.longitude);
+        nextDest = {
+          name: resDest.resolved.name,
+          lat: norm.lat,
+          lng: norm.lng,
+        };
+        setEndName(resDest.resolved.name);
+        setResolvedDestName(resDest.resolved.name);
+        setEndCoords({ lat: norm.lat, lng: norm.lng });
+        setFinalRoutingDestCoords({ lat: norm.lat, lng: norm.lng });
+        setDestDirty(false);
+      }
+    }
+
+    await executeRouteCalculation(nextOrigin, nextDest);
+    setIsEditingJourney(false);
   };
 
   useEffect(() => {
@@ -209,656 +318,861 @@ export const SmartRoutesView: React.FC<SmartRoutesViewProps> = ({
     isNightJourney,
   ]);
 
+  const handleSelectRoute = (route: SmartRouteOption) => {
+    setSelectedRouteId(route.id);
+  };
+
   const handleSwapEndpoints = () => {
-    const tempName = startName;
-    const tempCoords = { ...startCoords };
-    setStartName(endName);
-    setStartCoords({ ...endCoords });
-    setEndName(tempName);
-    setEndCoords(tempCoords);
+    const tempStartName = resolvedOriginName;
+    const tempStartCoords = { ...startCoords };
+
+    const tempEndName = resolvedDestName;
+    const tempEndCoords = { ...endCoords };
+
+    setStartName(tempEndName);
+    setResolvedOriginName(tempEndName);
+    setStartCoords(tempEndCoords);
+    setOriginDirty(false);
+
+    setEndName(tempStartName);
+    setOriginalUserDestInput(tempStartName);
+    setResolvedDestName(tempStartName);
+    setEndCoords(tempStartCoords);
+    setFinalRoutingDestCoords(tempStartCoords);
+    setDestDirty(false);
+    setClarificationPrompt(null);
   };
 
   const selectedRoute = routes.find((r) => r.id === selectedRouteId) || routes[0] || null;
+  const fastestRoute =
+    routes.find((r) => r.type === 'fastest') ||
+    routes.reduce(
+      (min, r) => (!min || r.durationSeconds < min.durationSeconds ? r : min),
+      routes[0] as SmartRouteOption | undefined
+    );
 
-  const activeMapLayers = new Set<MapLayerCategory>([
-    'hospital',
-    'clinic',
-    'police',
-    'pharmacy',
-    'fuel',
-    'cctv',
-    'streetlight',
-    'incident',
-    ...(showCrimeOverlay ? (['crime_hotspot'] as MapLayerCategory[]) : []),
-  ]);
+  const shortOriginName = resolvedOriginName.split(',')[0].trim();
+  const shortDestName = resolvedDestName.split(',')[0].trim();
+
+  // Keep map clean with only emergency help points and incidents so routes remain the focal point
+  const activeMapLayers = new Set<MapLayerCategory>(['hospital', 'police', 'incident']);
+
+  const getDisplayRouteTitle = (route: SmartRouteOption) => {
+    if (route.isRecommended && route.type === 'fastest') return 'Safest & fastest route';
+    if (route.isRecommended) return 'Safest route';
+    if (route.type === 'fastest') return 'Fastest route';
+    return 'Higher activity route';
+  };
+
+  const getCardActionLabel = (route: SmartRouteOption, isSelected: boolean) => {
+    const base = route.isRecommended
+      ? 'safest route'
+      : route.type === 'fastest'
+      ? 'fastest route'
+      : 'higher activity route';
+    return isSelected ? `Selected ${base}` : `Select ${base}`;
+  };
+
+  const getDynamicNarrative = (route: SmartRouteOption) => {
+    const routeMins = Math.max(1, Math.round(route.durationSeconds / 60));
+    const fastMins = fastestRoute
+      ? Math.max(1, Math.round(fastestRoute.durationSeconds / 60))
+      : routeMins;
+    const extraMins = Math.max(0, routeMins - fastMins);
+
+    if (route.isRecommended) {
+      if (extraMins > 0) {
+        return `For ${extraMins} extra minute${
+          extraMins === 1 ? '' : 's'
+        }, this route has a shorter observed low-activity stretch, more places listed as open per kilometre and a higher main-road share.`;
+      }
+      return `Matches the fastest travel duration while maintaining a shorter observed low-activity stretch, more places listed as open per kilometre and ${route.mainRoadCoveragePercent}% main-road share.`;
+    }
+
+    if (route.type === 'fastest') {
+      return `Lowest estimated ${
+        mode === 'car' ? 'driving' : mode === 'foot' ? 'walking' : 'cycling'
+      } duration (${routeMins} min) across ${route.summaryRoads} with ${
+        route.mainRoadCoveragePercent
+      }% primary road share.`;
+    }
+
+    return `Prioritises active commercial corridors (${route.summaryRoads}) with ${route.nightActivity.factors.establishmentsCount} open places and ${route.documentedHelpPointsCount} help points along the route.`;
+  };
+
+  const formatGapLabel = (gapKm: number) => {
+    const meters = Math.round(gapKm * 1000);
+    if (meters < 1000) {
+      return `~${Math.max(100, Math.round(meters / 50) * 50)} m`;
+    }
+    return `~${gapKm.toFixed(1)} km`;
+  };
 
   return (
-    <div className="space-y-4">
-      {/* PART 4.1 — COMPACT JOURNEY HEADER (Aevy TV / NightWise Minimalist Black Layout) */}
-      <section className="bg-[#111316] border border-[#22262E] rounded-lg p-4 space-y-3">
-        {/* Top Row: Corridor Title + Transport Modes + Departure Time + Night Toggle */}
-        <div className="flex flex-wrap items-center justify-between gap-3 pb-3 border-b border-[#1E222A]">
-          <div className="flex items-center gap-3">
-            <h1 className="font-display text-sm font-semibold text-white tracking-tight">
-              Smart Route Intelligence
-            </h1>
-            <span className="text-[#4B5563]">·</span>
-            <span className="text-xs text-[#8A909E]">
-              OSRM Road Geometry & Documented Corridor Activity
-            </span>
-          </div>
-
-          <div className="flex flex-wrap items-center gap-2">
-            {/* Transport Mode Selector */}
-            <div className="flex items-center bg-[#08090B] border border-[#22262E] rounded-md p-0.5">
-              {[
-                { id: 'car' as TravelMode, label: 'Driving', icon: Car },
-                { id: 'foot' as TravelMode, label: 'Walking', icon: Footprints },
-                { id: 'bike' as TravelMode, label: 'Cycling', icon: Bike },
-              ].map((m) => {
-                const Icon = m.icon;
-                const active = mode === m.id;
-                return (
-                  <button
-                    key={m.id}
-                    type="button"
-                    onClick={() => setMode(m.id)}
-                    className={`flex items-center gap-1.5 px-2.5 py-1 rounded text-xs font-medium transition-colors cursor-pointer whitespace-nowrap ${
-                      active
-                        ? 'bg-[#181A1F] text-[#00D2FF] border border-[#00D2FF]/40'
-                        : 'text-[#8A909E] hover:text-white'
-                    }`}
-                  >
-                    <Icon className="w-3.5 h-3.5" />
-                    <span>{m.label}</span>
-                  </button>
-                );
-              })}
-            </div>
-
-            {/* Departure Time Input */}
-            <div className="flex items-center gap-1.5 bg-[#08090B] border border-[#22262E] rounded-md px-2.5 py-1 text-xs">
-              <Clock className="w-3.5 h-3.5 text-[#8A909E]" />
-              <input
-                type="time"
-                value={departureTime}
-                onChange={(e) => {
-                  const val = e.target.value;
-                  setDepartureTime(val);
-                  const hour = parseInt(val.split(':')[0] || '22', 10);
-                  setIsNightJourney(hour >= 19 || hour < 6);
-                }}
-                className="bg-transparent font-mono text-xs text-white focus:outline-none"
-              />
-            </div>
-
-            {/* Night Journey Toggle */}
-            <button
-              type="button"
-              onClick={() => setIsNightJourney(!isNightJourney)}
-              className={`flex items-center gap-1.5 px-2.5 py-1 rounded-md border text-xs font-medium transition-colors cursor-pointer whitespace-nowrap ${
-                isNightJourney
-                  ? 'bg-[#181A1F] border-[#F59E0B]/50 text-[#F59E0B]'
-                  : 'bg-[#08090B] border-[#22262E] text-[#8A909E] hover:text-white'
-              }`}
-            >
-              {isNightJourney ? <Moon className="w-3.5 h-3.5" /> : <Sun className="w-3.5 h-3.5" />}
-              <span>{isNightJourney ? 'Night Journey (Active)' : 'Daytime Journey'}</span>
-            </button>
-
-            {/* Weights Modal Button */}
-            <button
-              type="button"
-              onClick={() => setShowWeightsModal(!showWeightsModal)}
-              className="flex items-center gap-1 px-2.5 py-1 rounded-md bg-[#08090B] hover:bg-[#181A1F] border border-[#22262E] text-xs text-[#8A909E] hover:text-white cursor-pointer"
-            >
-              <Sliders className="w-3.5 h-3.5" />
-              <span>Weights</span>
-            </button>
-          </div>
-        </div>
-
-        {/* Middle Row: Origin + Swap + Destination + Calculate Button */}
-        <div className="grid grid-cols-1 lg:grid-cols-12 gap-2.5 items-center">
-          {/* Origin Input */}
-          <div className="lg:col-span-5 relative">
-            <div className="flex items-center gap-2 bg-[#181A1F] border border-[#262A34] focus-within:border-[#00D2FF] rounded-md px-3 py-2">
-              <span className="w-4 h-4 rounded bg-[#00D2FF] text-[#08090B] font-mono text-[10px] font-bold flex items-center justify-center shrink-0">
-                A
-              </span>
-              <input
-                type="text"
-                value={startName}
-                onFocus={() => setActiveAutocomplete('origin')}
-                onBlur={() => setTimeout(() => setActiveAutocomplete(null), 200)}
-                onChange={(e) => setStartName(e.target.value)}
-                placeholder="Enter origin in Chandigarh or Mohali..."
-                className="w-full bg-transparent text-xs text-white placeholder:text-[#6B7280] focus:outline-none"
-              />
+    <div className="w-full text-[#F5F7FA] space-y-5">
+      {/* Main Minimalist Two-Column Layout: Compact Left Panel + Large Map on the Right */}
+      <div className="grid grid-cols-1 lg:grid-cols-12 gap-5 items-stretch">
+        {/* LEFT COLUMN: Compact Route Selection Panel */}
+        <div
+          className={`${
+            isMapFullScreen ? 'hidden' : 'lg:col-span-5 xl:col-span-4'
+          } flex flex-col justify-between bg-[#0A0C0F] border border-white/[0.07] rounded-2xl p-5 space-y-4 transition-all duration-200`}
+        >
+          <div className="space-y-4">
+            {/* Top Row: "<- Edit journey" & Mode / Time Quick Pill */}
+            <div className="flex items-center justify-between gap-2">
               <button
                 type="button"
-                onClick={() => {
-                  setStartName('Current GPS Location');
-                  setStartCoords({ lat: userLocation.lat, lng: userLocation.lng });
-                }}
-                title="Use my current GPS coordinates"
-                className="text-[#8A909E] hover:text-[#00D2FF] cursor-pointer shrink-0"
+                onClick={() => setIsEditingJourney((prev) => !prev)}
+                className="urbanshield-interactive-btn inline-flex items-center gap-2 text-xs text-[#929AA5] hover:text-[#F5F7FA] cursor-pointer group"
               >
-                <Crosshair className="w-3.5 h-3.5" />
+                <ArrowLeft className="w-3.5 h-3.5 transition-transform duration-150 group-hover:-translate-x-0.5" />
+                <span>{isEditingJourney ? 'Close journey editor' : 'Edit journey'}</span>
+              </button>
+
+              <button
+                type="button"
+                onClick={() => setIsEditingJourney((prev) => !prev)}
+                className="urbanshield-interactive-btn inline-flex items-center gap-1.5 px-3 py-1 rounded-full border border-white/[0.08] bg-[#101317] hover:bg-[#15191E] text-[11px] text-[#F5F7FA] cursor-pointer"
+              >
+                {isNightJourney ? (
+                  <Moon className="w-3 h-3 text-[#00D9F5]" />
+                ) : (
+                  <Sun className="w-3 h-3 text-[#F59E0B]" />
+                )}
+                <span className="font-mono tabular-nums">{departureTime}</span>
+                <span className="text-[#929AA5]">·</span>
+                <span className="capitalize">
+                  {mode === 'car' ? 'Drive' : mode === 'foot' ? 'Walk' : 'Bike'}
+                </span>
+                <SlidersHorizontal className="w-3 h-3 text-[#929AA5] ml-0.5" />
               </button>
             </div>
 
-            {activeAutocomplete === 'origin' && originSuggestions.length > 0 && (
-              <div className="absolute left-0 right-0 top-full mt-1 z-50 bg-[#111316] border border-[#262A34] rounded-md shadow-2xl max-h-56 overflow-y-auto divide-y divide-[#1E222A]">
-                {originSuggestions.map((s) => (
-                  <button
-                    key={s.id}
-                    type="button"
-                    onMouseDown={() => {
-                      setStartName(s.name);
-                      setStartCoords({ lat: s.latitude, lng: s.longitude });
-                      setActiveAutocomplete(null);
-                    }}
-                    className="w-full px-3 py-2 text-left hover:bg-[#181A1F] flex items-center justify-between gap-2 text-xs cursor-pointer"
-                  >
-                    <span className="text-white truncate">{s.name}</span>
-                    <span className="text-[10px] font-mono text-[#8A909E] shrink-0">
-                      {s.source}
-                    </span>
-                  </button>
-                ))}
-              </div>
-            )}
-          </div>
-
-          {/* Swap Button */}
-          <div className="lg:col-span-1 flex justify-center">
-            <button
-              type="button"
-              onClick={handleSwapEndpoints}
-              title="Swap Origin and Destination"
-              className="p-2 rounded-md bg-[#181A1F] hover:bg-[#22262E] border border-[#262A34] text-[#8A909E] hover:text-white transition-colors cursor-pointer"
-            >
-              <ArrowLeftRight className="w-3.5 h-3.5" />
-            </button>
-          </div>
-
-          {/* Destination Input */}
-          <div className="lg:col-span-4 relative">
-            <div className="flex items-center gap-2 bg-[#181A1F] border border-[#262A34] focus-within:border-[#F59E0B] rounded-md px-3 py-2">
-              <span className="w-4 h-4 rounded bg-[#F59E0B] text-[#08090B] font-mono text-[10px] font-bold flex items-center justify-center shrink-0">
-                B
-              </span>
-              <input
-                type="text"
-                value={endName}
-                onFocus={() => setActiveAutocomplete('dest')}
-                onBlur={() => setTimeout(() => setActiveAutocomplete(null), 200)}
-                onChange={(e) => setEndName(e.target.value)}
-                placeholder="Enter destination in Chandigarh or Mohali..."
-                className="w-full bg-transparent text-xs text-white placeholder:text-[#6B7280] focus:outline-none"
-              />
+            {/* Header Title & Corridor Subtitle */}
+            <div className="space-y-1">
+              <h1 className="urbanshield-heading-enter font-display text-2xl font-bold tracking-tight text-[#F5F7FA]">
+                Your route options
+              </h1>
               <button
                 type="button"
-                onClick={() => {
-                  const next = saveUserLocationBookmark({
-                    label: endName.split(',')[0],
-                    address: endName,
-                    latitude: endCoords.lat,
-                    longitude: endCoords.lng,
-                    category: 'custom',
-                  });
-                  setSavedLocations(next);
-                }}
-                title="Save destination to bookmarks"
-                className="text-[#8A909E] hover:text-[#F59E0B] cursor-pointer shrink-0"
+                onClick={() => setIsEditingJourney(true)}
+                className="urbanshield-subtext-enter flex items-center gap-2 text-xs text-[#929AA5] hover:text-[#F5F7FA] transition-colors duration-150 text-left cursor-pointer max-w-full"
               >
-                <Bookmark className="w-3.5 h-3.5" />
+                <span className="truncate max-w-[160px] sm:max-w-[200px]">{shortOriginName}</span>
+                <span className="text-[#929AA5] shrink-0">→</span>
+                <span className="truncate max-w-[160px] sm:max-w-[200px]">{shortDestName}</span>
               </button>
             </div>
 
-            {activeAutocomplete === 'dest' && destSuggestions.length > 0 && (
-              <div className="absolute left-0 right-0 top-full mt-1 z-50 bg-[#111316] border border-[#262A34] rounded-md shadow-2xl max-h-56 overflow-y-auto divide-y divide-[#1E222A]">
-                {destSuggestions.map((s) => (
-                  <button
-                    key={s.id}
-                    type="button"
-                    onMouseDown={() => {
-                      setEndName(s.name);
-                      setEndCoords({ lat: s.latitude, lng: s.longitude });
-                      setActiveAutocomplete(null);
-                    }}
-                    className="w-full px-3 py-2 text-left hover:bg-[#181A1F] flex items-center justify-between gap-2 text-xs cursor-pointer"
-                  >
-                    <span className="text-white truncate">{s.name}</span>
-                    <span className="text-[10px] font-mono text-[#8A909E] shrink-0">
-                      {s.source}
-                    </span>
-                  </button>
-                ))}
-              </div>
-            )}
-          </div>
-
-          {/* Calculate Action */}
-          <div className="lg:col-span-2">
-            <button
-              type="button"
-              onClick={executeRouteCalculation}
-              disabled={loading}
-              className="w-full py-2 px-3 rounded-md bg-[#00D2FF] hover:bg-[#38BDF8] text-[#08090B] font-semibold text-xs transition-colors cursor-pointer whitespace-nowrap"
-            >
-              {loading ? 'Calculating...' : 'Calculate Routes'}
-            </button>
-          </div>
-        </div>
-
-        {/* Bottom Row: 5 Benchmark Corridors & Saved Bookmarks */}
-        <div className="flex flex-wrap items-center gap-1.5 pt-1 text-[11px]">
-          <span className="text-[#8A909E] font-mono mr-1">Corridors:</span>
-          {ROUTE_PRESETS.map((preset) => (
-            <button
-              key={preset.id}
-              type="button"
-              onClick={() => {
-                setStartName(preset.start.name);
-                setStartCoords({ lat: preset.start.lat, lng: preset.start.lng });
-                setEndName(preset.end.name);
-                setEndCoords({ lat: preset.end.lat, lng: preset.end.lng });
-              }}
-              className="px-2 py-0.5 rounded bg-[#181A1F] hover:bg-[#22262E] border border-[#262A34] text-[#D1D5DB] hover:text-white transition-colors cursor-pointer whitespace-nowrap"
-            >
-              {preset.label}
-            </button>
-          ))}
-        </div>
-
-        {/* Optional Scoring Weight Customizer */}
-        {showWeightsModal && (
-          <div className="p-3 rounded-md bg-[#08090B] border border-[#22262E] grid grid-cols-2 sm:grid-cols-5 gap-3 text-xs">
-            {[
-              { key: 'establishments', label: 'Commercial Activity (%)' },
-              { key: 'mainRoads', label: 'Main-Road Coverage (%)' },
-              { key: 'emergencyServices', label: 'Emergency Proximity (%)' },
-              { key: 'transport', label: 'Transit Access (%)' },
-              { key: 'streetlights', label: 'Lighting & CCTV (%)' },
-            ].map((item) => (
-              <div key={item.key} className="space-y-1">
-                <label className="block text-[10px] text-[#8A909E]">{item.label}</label>
-                <input
-                  type="number"
-                  min={0}
-                  max={100}
-                  value={weights[item.key as keyof typeof weights]}
-                  onChange={(e) =>
-                    setWeights((prev) => ({
-                      ...prev,
-                      [item.key]: Number(e.target.value),
-                    }))
-                  }
-                  className="w-full bg-[#111316] border border-[#262A34] rounded px-2 py-1 font-mono text-xs text-white"
-                />
-              </div>
-            ))}
-          </div>
-        )}
-      </section>
-
-      {error && (
-        <div className="p-3 rounded-md bg-red-950/40 border border-red-500/40 text-xs text-red-200">
-          {error}
-        </div>
-      )}
-
-      {routeNote && (
-        <div className="px-3 py-2 rounded-md bg-[#111316] border border-[#22262E] text-[11px] text-[#8A909E] flex items-center gap-2">
-          <AlertCircle className="w-3.5 h-3.5 text-[#00D2FF] shrink-0" />
-          <span>{routeNote}</span>
-        </div>
-      )}
-
-      {/* PART 4.2 — ROUTE COMPARISON CARDS (Recommended in Gold/Amber #F59E0B, Fastest, Higher Activity) */}
-      <section
-        className={`grid grid-cols-1 ${
-          routes.length === 1
-            ? 'md:grid-cols-1'
-            : routes.length === 2
-            ? 'md:grid-cols-2'
-            : 'md:grid-cols-3'
-        } gap-3`}
-      >
-        {routes.map((route) => {
-          const isSelected = route.id === selectedRoute?.id;
-          const isRec = route.isRecommended;
-          const distKm = (route.distanceMeters / 1000).toFixed(1);
-          const mins = Math.max(1, Math.round(route.durationSeconds / 60));
-          const emergencyCount =
-            route.nearbyPoisCount.hospitals +
-            route.nearbyPoisCount.police +
-            route.nearbyPoisCount.pharmacies;
-
-          return (
-            <button
-              key={route.id}
-              type="button"
-              onClick={() => setSelectedRouteId(route.id)}
-              className={`p-4 rounded-lg border text-left transition-all cursor-pointer flex flex-col justify-between ${
-                isSelected
-                  ? isRec
-                    ? 'bg-[#111316] border-[#F59E0B] shadow-[0_0_0_1px_rgba(245,158,11,0.3)]'
-                    : 'bg-[#111316] border-[#00D2FF] shadow-[0_0_0_1px_rgba(0,210,255,0.3)]'
-                  : 'bg-[#111316]/80 hover:bg-[#111316] border-[#22262E]'
-              }`}
-            >
-              <div className="space-y-2">
-                {/* Top Kicker (Zero-Pill Unboxed Metadata Discipline) */}
-                <div className="flex items-center justify-between text-[11px] font-mono">
-                  <span
-                    className={
-                      isRec
-                        ? 'text-[#F59E0B] font-semibold'
-                        : route.type === 'fastest'
-                        ? 'text-[#00D2FF] font-semibold'
-                        : 'text-emerald-400 font-semibold'
-                    }
-                  >
-                    {isRec ? '★ RECOMMENDED ROUTE' : route.label.toUpperCase()}
-                  </span>
-                  <span className="text-[#8A909E] tabular-nums">
-                    Confidence: {route.nightActivity.confidencePercentage}% (
-                    {route.nightActivity.confidenceTier})
-                  </span>
-                </div>
-
-                {/* Primary Metrics Row: Duration, Distance, Night Activity Score */}
-                <div className="flex items-baseline justify-between gap-2 pt-0.5">
-                  <div className="flex items-baseline gap-2">
-                    <span className="font-mono text-xl font-bold text-white tabular-nums">
-                      {mins} min
-                    </span>
-                    <span className="font-mono text-xs text-[#8A909E] tabular-nums">
-                      ({distKm} km)
-                    </span>
-                  </div>
-
-                  <div className="text-right">
-                    <span
-                      className={`font-mono text-lg font-bold tabular-nums ${
-                        isRec ? 'text-[#F59E0B]' : 'text-[#00D2FF]'
-                      }`}
-                    >
-                      {route.nightActivity.overallScore !== null
-                        ? `${route.nightActivity.overallScore}/100`
-                        : 'Insufficient data'}
-                    </span>
-                    <div className="text-[10px] font-mono text-[#8A909E]">
-                      Night Activity Score
-                    </div>
-                  </div>
-                </div>
-
-                {/* Why Recommended / Route Explanation */}
-                <p className="text-xs text-[#D1D5DB] leading-relaxed">
-                  {route.recommendationReason}
-                </p>
-              </div>
-
-              {/* Compact 4-Metric Telemetry Grid */}
-              <div className="mt-3 pt-2.5 border-t border-[#1E222A] grid grid-cols-2 sm:grid-cols-4 gap-2 text-[11px] font-mono tabular-nums">
-                <div>
-                  <div className="text-[#8A909E] text-[10px]">Emergency POIs</div>
-                  <div className="text-white font-semibold">{emergencyCount} nearby</div>
-                </div>
-                <div>
-                  <div className="text-[#8A909E] text-[10px]">Help Points</div>
-                  <div className="text-white font-semibold">
-                    {route.documentedHelpPointsCount} nodes
-                  </div>
-                </div>
-                <div>
-                  <div className="text-[#8A909E] text-[10px]">Main-Road Cov.</div>
-                  <div className="text-white font-semibold">{route.mainRoadCoveragePercent}%</div>
-                </div>
-                <div>
-                  <div className="text-[#8A909E] text-[10px]">Max Help Gap</div>
-                  <div className="text-white font-semibold">
-                    {route.longestGapBetweenHelpPointsKm} km
-                  </div>
-                </div>
-              </div>
-            </button>
-          );
-        })}
-      </section>
-
-      {/* PART 4.3 — MAJOR MAP VIEWPORT + TRANSPARENT NIGHT ACTIVITY SCORING SIDEBAR */}
-      <section className="grid grid-cols-1 lg:grid-cols-12 gap-4 items-stretch">
-        {/* Map Column (8 cols) */}
-        <div className="lg:col-span-8 flex flex-col space-y-2">
-          <div className="flex flex-wrap items-center justify-between gap-2 bg-[#111316] border border-[#22262E] rounded-md px-3 py-2 text-xs">
-            <div className="flex items-center gap-2 text-[#D1D5DB]">
-              <Navigation className="w-3.5 h-3.5 text-[#F59E0B]" />
-              <span className="font-medium">
-                Active Corridor: {selectedRoute?.summaryRoads || 'Calculating...'}
-              </span>
-            </div>
-            <div className="flex items-center gap-3">
-              <label className="flex items-center gap-1.5 text-[11px] text-[#8A909E] cursor-pointer">
-                <input
-                  type="checkbox"
-                  checked={showCrimeOverlay}
-                  onChange={(e) => setShowCrimeOverlay(e.target.checked)}
-                />
-                <span>Overlay Historical Crime Jurisdictions</span>
-              </label>
-            </div>
-          </div>
-
-          <InteractiveCityMap
-            center={CHANDIGARH_CENTER}
-            userLocation={userLocation}
-            pois={pois}
-            reports={reports}
-            crimeRecords={showCrimeOverlay ? HISTORICAL_CRIME_DATABASE : []}
-            activeLayers={activeMapLayers}
-            selectedPoi={null}
-            onSelectPoi={() => {}}
-            routes={routes}
-            selectedRouteId={selectedRoute?.id}
-            onSelectRoute={(id) => setSelectedRouteId(id)}
-            originCoords={{ lat: startCoords.lat, lng: startCoords.lng, label: startName }}
-            destinationCoords={{ lat: endCoords.lat, lng: endCoords.lng, label: endName }}
-            heightClass="h-[500px]"
-          />
-        </div>
-
-        {/* Right Column (4 cols): Transparent Night Activity Score Model (Part 9) */}
-        <div className="lg:col-span-4 bg-[#111316] border border-[#22262E] rounded-lg p-4 flex flex-col justify-between space-y-4">
-          {selectedRoute ? (
-            <>
-              <div className="space-y-3">
-                <div className="pb-2.5 border-b border-[#1E222A]">
-                  <div className="flex items-center justify-between text-[11px] font-mono text-[#8A909E]">
-                    <span>TRANSPARENT SCORING MODEL</span>
-                    <span>CONFIDENCE: {selectedRoute.nightActivity.confidencePercentage}%</span>
-                  </div>
-                  <h2 className="font-display text-sm font-semibold text-white mt-1">
-                    {selectedRoute.nightActivity.scoreStatusLabel}
-                  </h2>
-                </div>
-
-                {/* 4 Explicit Epistemic Dimensions (Activity, Infrastructure, Historical Crime, Confidence) */}
-                <div className="space-y-2.5 text-xs">
-                  <div className="p-2.5 rounded bg-[#181A1F] border border-[#262A34] space-y-1">
-                    <div className="flex items-center justify-between font-mono text-[11px]">
-                      <span className="text-[#00D2FF]">1. Documented Activity</span>
-                      <span className="text-white tabular-nums">
-                        {selectedRoute.nightActivity.factors.establishmentsScore}/100
-                      </span>
-                    </div>
-                    <p className="text-[11px] text-[#9CA3AF]">
-                      {selectedRoute.nightActivity.activitySummary}
-                    </p>
-                  </div>
-
-                  <div className="p-2.5 rounded bg-[#181A1F] border border-[#262A34] space-y-1">
-                    <div className="flex items-center justify-between font-mono text-[11px]">
-                      <span className="text-[#F59E0B]">2. Infrastructure Availability</span>
-                      <span className="text-white tabular-nums">
-                        {selectedRoute.nightActivity.factors.streetlightScore}/100
-                      </span>
-                    </div>
-                    <p className="text-[11px] text-[#9CA3AF]">
-                      {selectedRoute.nightActivity.infrastructureSummary}
-                    </p>
-                  </div>
-
-                  <div className="p-2.5 rounded bg-[#181A1F] border border-[#262A34] space-y-1">
-                    <div className="flex items-center justify-between font-mono text-[11px]">
-                      <span className="text-emerald-400">3. Emergency & Transit Access</span>
-                      <span className="text-white tabular-nums">
-                        {selectedRoute.nightActivity.factors.emergencyScore}/100
-                      </span>
-                    </div>
-                    <p className="text-[11px] text-[#9CA3AF]">
-                      {selectedRoute.nearbyPoisCount.hospitals} hospitals/clinics ·{' '}
-                      {selectedRoute.nearbyPoisCount.police} police stations ·{' '}
-                      {selectedRoute.nearbyPoisCount.pharmacies} pharmacies ·{' '}
-                      {selectedRoute.nearbyPoisCount.transportStops} transit stops.
-                    </p>
-                  </div>
-
-                  <div className="p-2.5 rounded bg-[#181A1F] border border-[#262A34] space-y-1">
-                    <div className="flex items-center justify-between font-mono text-[11px]">
-                      <span className="text-rose-400">4. Historical Crime Context</span>
-                      <span className="text-[#8A909E]">PS-Level</span>
-                    </div>
-                    <p className="text-[11px] text-[#9CA3AF]">
-                      {selectedRoute.nightActivity.historicalCrimeExposure}
-                    </p>
-                  </div>
-                </div>
-              </div>
-
-              {/* Epistemic Honesty Note */}
-              <div className="pt-2.5 border-t border-[#1E222A] space-y-1.5 text-[11px] text-[#8A909E]">
-                <div className="flex items-center gap-1.5 text-white font-medium">
-                  <CheckCircle2 className="w-3.5 h-3.5 text-[#00D2FF] shrink-0" />
-                  <span>Activity vs. Personal Safety Distinction</span>
-                </div>
-                <p className="leading-relaxed">
-                  Higher commercial or road activity does not guarantee personal safety. Missing
-                  OpenStreetMap tags indicate unmapped data rather than confirmed absence of
-                  streetlights or CCTV.
-                </p>
-              </div>
-            </>
-          ) : (
-            <div className="py-12 text-center text-xs text-[#8A909E]">
-              Select or calculate a route to inspect corridor intelligence.
-            </div>
-          )}
-        </div>
-      </section>
-
-      {/* PART 4.4 — COMPACT EXPANDABLE ROUTE DETAILS SECTION */}
-      {selectedRoute && (
-        <section className="bg-[#111316] border border-[#22262E] rounded-lg overflow-hidden">
-          <button
-            type="button"
-            onClick={() => setDetailsExpanded(!detailsExpanded)}
-            className="w-full px-4 py-3 bg-[#181A1F] hover:bg-[#1E222A] flex items-center justify-between text-xs font-medium text-white cursor-pointer"
-          >
-            <div className="flex flex-wrap items-center gap-3">
-              <span className="font-display font-semibold">
-                Corridor Facility & Help-Point Audit — {selectedRoute.label}
-              </span>
-              <span className="text-[#6B7280]">·</span>
-              <span className="font-mono text-[#00D2FF] tabular-nums">
-                Longest Gap Between Documented Help Points:{' '}
-                {selectedRoute.longestGapBetweenHelpPointsKm} km
-              </span>
-              <span className="text-[#6B7280]">·</span>
-              <span className="font-mono text-[#8A909E] tabular-nums">
-                Infrastructure Data Confidence: {selectedRoute.nightActivity.confidencePercentage}%
-              </span>
-            </div>
-            {detailsExpanded ? (
-              <ChevronUp className="w-4 h-4 text-[#8A909E]" />
-            ) : (
-              <ChevronDown className="w-4 h-4 text-[#8A909E]" />
-            )}
-          </button>
-
-          {detailsExpanded && (
-            <div className="p-4 grid grid-cols-1 md:grid-cols-2 lg:grid-cols-5 gap-3 text-xs">
-              {[
-                {
-                  title: 'Nearby Hospitals & Clinics',
-                  items: selectedRoute.nearbyFacilities.hospitals,
-                  emptyNote:
-                    'No hospital mapped within 650m corridor (nearest city hospital reachable via arterial connector).',
-                },
-                {
-                  title: 'Police Stations',
-                  items: selectedRoute.nearbyFacilities.police,
-                  emptyNote:
-                    'No police station building within 650m corridor; covered by territorial PCR patrol jurisdiction.',
-                },
-                {
-                  title: 'Pharmacies',
-                  items: selectedRoute.nearbyFacilities.pharmacies,
-                  emptyNote:
-                    'No pharmacy node tagged in OSM within 650m; sub-sector chemist shops may be unmapped.',
-                },
-                {
-                  title: 'Petrol Pumps (24/7 Help Points)',
-                  items: selectedRoute.nearbyFacilities.fuel,
-                  emptyNote:
-                    'No fuel station mapped within 650m of this specific alignment.',
-                },
-                {
-                  title: 'Commercial Establishments',
-                  items: selectedRoute.nearbyFacilities.commercial,
-                  emptyNote:
-                    'Limited OSM commercial tags along this stretch (unmapped shops may still exist).',
-                },
-              ].map((group) => (
-                <div
-                  key={group.title}
-                  className="bg-[#08090B] border border-[#22262E] rounded-md p-3 space-y-2"
-                >
-                  <div className="flex items-center justify-between border-b border-[#1E222A] pb-1.5">
-                    <span className="font-semibold text-white">{group.title}</span>
-                    <span className="font-mono text-[11px] text-[#00D2FF] tabular-nums">
-                      {group.items.length}
-                    </span>
-                  </div>
-                  {group.items.length === 0 ? (
-                    <p className="text-[11px] text-[#8A909E] leading-relaxed">{group.emptyNote}</p>
-                  ) : (
-                    <div className="space-y-1.5 max-h-40 overflow-y-auto pr-1">
-                      {group.items.map((fac) => (
-                        <div
-                          key={fac.id}
-                          className="p-1.5 rounded bg-[#111316] border border-[#1E222A] space-y-0.5"
+            {/* Collapsible Journey Input Drawer */}
+            {isEditingJourney && (
+              <div className="p-3.5 rounded-xl bg-[#101317] border border-white/[0.08] space-y-3 urbanshield-card-enter">
+                {/* Transport Mode & Time Controls */}
+                <div className="flex flex-wrap items-center justify-between gap-2">
+                  <div className="flex items-center bg-[#050607] border border-white/[0.07] rounded-lg p-0.5">
+                    {[
+                      { id: 'car' as TravelMode, label: 'Drive', icon: Car },
+                      { id: 'foot' as TravelMode, label: 'Walk', icon: Footprints },
+                      { id: 'bike' as TravelMode, label: 'Bike', icon: Bike },
+                    ].map((m) => {
+                      const Icon = m.icon;
+                      const active = mode === m.id;
+                      return (
+                        <button
+                          key={m.id}
+                          type="button"
+                          onClick={() => setMode(m.id)}
+                          className={`urbanshield-interactive-btn flex items-center gap-1 px-2.5 py-1 rounded-md text-[11px] font-medium cursor-pointer whitespace-nowrap ${
+                            active
+                              ? 'bg-[#15191E] text-[#00D9F5] border border-[#00D9F5]/40'
+                              : 'text-[#929AA5] hover:text-[#F5F7FA]'
+                          }`}
                         >
-                          <div className="text-[11px] font-medium text-white truncate">
-                            {fac.name}
-                          </div>
-                          <div className="flex items-center justify-between text-[10px] font-mono text-[#8A909E]">
-                            <span>{fac.distanceFromRouteMeters}m from route</span>
-                            <span>{fac.openingHours || 'Hours unverified'}</span>
-                          </div>
-                        </div>
+                          <Icon className="w-3 h-3" />
+                          <span>{m.label}</span>
+                        </button>
+                      );
+                    })}
+                  </div>
+
+                  <div className="flex items-center gap-1.5">
+                    <div className="flex items-center gap-1 bg-[#050607] border border-white/[0.07] rounded-lg px-2 py-1 text-[11px]">
+                      <Clock className="w-3 h-3 text-[#929AA5]" />
+                      <input
+                        type="time"
+                        value={departureTime}
+                        onChange={(e) => {
+                          const val = e.target.value;
+                          setDepartureTime(val);
+                          const hour = parseInt(val.split(':')[0] || '22', 10);
+                          setIsNightJourney(hour >= 19 || hour < 6);
+                        }}
+                        className="bg-transparent font-mono text-[11px] text-[#F5F7FA] focus:outline-none"
+                      />
+                    </div>
+
+                    <button
+                      type="button"
+                      onClick={() => setIsNightJourney(!isNightJourney)}
+                      className={`urbanshield-interactive-btn p-1.5 rounded-lg border cursor-pointer ${
+                        isNightJourney
+                          ? 'bg-[#15191E] border-[#00D9F5]/40 text-[#00D9F5]'
+                          : 'bg-[#050607] border-white/[0.07] text-[#929AA5] hover:text-[#F5F7FA]'
+                      }`}
+                      title={
+                        isNightJourney ? 'Night journey scoring active' : 'Daytime scoring active'
+                      }
+                    >
+                      {isNightJourney ? (
+                        <Moon className="w-3.5 h-3.5" />
+                      ) : (
+                        <Sun className="w-3.5 h-3.5" />
+                      )}
+                    </button>
+                  </div>
+                </div>
+
+                {/* Origin Input */}
+                <div className="relative">
+                  <div className="flex items-center gap-2 bg-[#050607] border border-white/[0.08] focus-within:border-[#00D9F5] rounded-lg px-2.5 py-2">
+                    <span className="w-4 h-4 rounded-full bg-[#3B82F6] text-white font-mono text-[9px] font-bold flex items-center justify-center shrink-0">
+                      A
+                    </span>
+                    <input
+                      type="text"
+                      value={startName}
+                      onFocus={() => setActiveAutocomplete('origin')}
+                      onBlur={() => setTimeout(() => setActiveAutocomplete(null), 200)}
+                      onChange={(e) => {
+                        setStartName(e.target.value);
+                        setOriginDirty(true);
+                        setClarificationPrompt(null);
+                      }}
+                      onKeyDown={(e) => {
+                        if (e.key === 'Enter') {
+                          e.preventDefault();
+                          setActiveAutocomplete(null);
+                          resolveAndApplyJourneyInputs();
+                        }
+                      }}
+                      placeholder="Origin in Chandigarh or Mohali..."
+                      className="w-full bg-transparent text-xs text-[#F5F7FA] placeholder:text-[#929AA5]/60 focus:outline-none"
+                    />
+                    <button
+                      type="button"
+                      onClick={() => {
+                        const norm = ensureLatLngOrder(userLocation.lat, userLocation.lng);
+                        setStartName('Current GPS Location');
+                        setResolvedOriginName('Current GPS Location');
+                        setStartCoords({ lat: norm.lat, lng: norm.lng });
+                        setOriginDirty(false);
+                        setClarificationPrompt(null);
+                      }}
+                      title="Use current GPS location"
+                      className="text-[#929AA5] hover:text-[#00D9F5] cursor-pointer shrink-0"
+                    >
+                      <Crosshair className="w-3.5 h-3.5" />
+                    </button>
+                  </div>
+
+                  {activeAutocomplete === 'origin' && originSuggestions.length > 0 && (
+                    <div className="absolute left-0 right-0 top-full mt-1 z-50 bg-[#101317] border border-white/[0.09] rounded-lg shadow-2xl max-h-48 overflow-y-auto divide-y divide-white/[0.05]">
+                      {originSuggestions.map((s) => (
+                        <button
+                          key={s.id}
+                          type="button"
+                          onMouseDown={() => {
+                            const norm = ensureLatLngOrder(s.latitude, s.longitude);
+                            setStartName(s.name);
+                            setResolvedOriginName(s.name);
+                            setStartCoords({ lat: norm.lat, lng: norm.lng });
+                            setOriginDirty(false);
+                            setClarificationPrompt(null);
+                            setActiveAutocomplete(null);
+                          }}
+                          className="w-full px-3 py-2 text-left hover:bg-[#15191E] flex items-center justify-between gap-2 text-xs cursor-pointer"
+                        >
+                          <span className="text-[#F5F7FA] truncate">{s.name}</span>
+                          <span className="text-[10px] font-mono text-[#929AA5] shrink-0">
+                            {s.source === 'Nominatim OSM' ? 'OSM' : 'Verified'}
+                          </span>
+                        </button>
                       ))}
                     </div>
                   )}
                 </div>
-              ))}
+
+                {/* Destination Input + Swap */}
+                <div className="relative">
+                  <div className="flex items-center gap-2 bg-[#050607] border border-white/[0.08] focus-within:border-[#00D9F5] rounded-lg px-2.5 py-2">
+                    <span className="w-4 h-4 rounded-full bg-[#FF4148] text-white font-mono text-[9px] font-bold flex items-center justify-center shrink-0">
+                      B
+                    </span>
+                    <input
+                      type="text"
+                      value={endName}
+                      onFocus={() => setActiveAutocomplete('dest')}
+                      onBlur={() => setTimeout(() => setActiveAutocomplete(null), 200)}
+                      onChange={(e) => {
+                        setEndName(e.target.value);
+                        setOriginalUserDestInput(e.target.value);
+                        setDestDirty(true);
+                        setClarificationPrompt(null);
+                      }}
+                      onKeyDown={(e) => {
+                        if (e.key === 'Enter') {
+                          e.preventDefault();
+                          setActiveAutocomplete(null);
+                          resolveAndApplyJourneyInputs();
+                        }
+                      }}
+                      placeholder="Destination in Chandigarh or Mohali..."
+                      className="w-full bg-transparent text-xs text-[#F5F7FA] placeholder:text-[#929AA5]/60 focus:outline-none"
+                    />
+                    <button
+                      type="button"
+                      onClick={handleSwapEndpoints}
+                      title="Swap Origin & Destination"
+                      className="text-[#929AA5] hover:text-[#F5F7FA] cursor-pointer shrink-0"
+                    >
+                      <ArrowLeftRight className="w-3.5 h-3.5" />
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => {
+                        const next = saveUserLocationBookmark({
+                          label: resolvedDestName.split(',')[0],
+                          address: resolvedDestName,
+                          latitude: endCoords.lat,
+                          longitude: endCoords.lng,
+                          category: 'custom',
+                        });
+                        setSavedLocations(next);
+                      }}
+                      title="Bookmark destination"
+                      className="text-[#929AA5] hover:text-[#00D9F5] cursor-pointer shrink-0"
+                    >
+                      <Bookmark className="w-3.5 h-3.5" />
+                    </button>
+                  </div>
+
+                  {activeAutocomplete === 'dest' && destSuggestions.length > 0 && (
+                    <div className="absolute left-0 right-0 top-full mt-1 z-50 bg-[#101317] border border-white/[0.09] rounded-lg shadow-2xl max-h-48 overflow-y-auto divide-y divide-white/[0.05]">
+                      {destSuggestions.map((s) => (
+                        <button
+                          key={s.id}
+                          type="button"
+                          onMouseDown={() => {
+                            const norm = ensureLatLngOrder(s.latitude, s.longitude);
+                            setOriginalUserDestInput(
+                              destDirty && endName.trim() ? endName.trim() : s.name
+                            );
+                            setEndName(s.name);
+                            setResolvedDestName(s.name);
+                            setEndCoords({ lat: norm.lat, lng: norm.lng });
+                            setFinalRoutingDestCoords({ lat: norm.lat, lng: norm.lng });
+                            setDestDirty(false);
+                            setClarificationPrompt(null);
+                            setActiveAutocomplete(null);
+                          }}
+                          className="w-full px-3 py-2 text-left hover:bg-[#15191E] flex items-center justify-between gap-2 text-xs cursor-pointer"
+                        >
+                          <span className="text-[#F5F7FA] truncate">{s.name}</span>
+                          <span className="text-[10px] font-mono text-[#929AA5] shrink-0">
+                            {s.source === 'Nominatim OSM' ? 'OSM' : 'Verified'}
+                          </span>
+                        </button>
+                      ))}
+                    </div>
+                  )}
+                </div>
+
+                {/* Clarification Selector when multiple locations match ambiguously */}
+                {clarificationPrompt && (
+                  <div className="p-2.5 rounded-lg bg-[#15191E] border border-[#00D9F5]/40 space-y-2">
+                    <div className="text-[11px] text-[#00D9F5] font-medium">
+                      {clarificationPrompt.reason}
+                    </div>
+                    <div className="space-y-1">
+                      {clarificationPrompt.candidates.map((cand) => (
+                        <button
+                          key={cand.id}
+                          type="button"
+                          onClick={() => {
+                            const norm = ensureLatLngOrder(cand.latitude, cand.longitude);
+                            if (clarificationPrompt.field === 'origin') {
+                              setStartName(cand.name);
+                              setResolvedOriginName(cand.name);
+                              setStartCoords({ lat: norm.lat, lng: norm.lng });
+                              setOriginDirty(false);
+                            } else {
+                              setEndName(cand.name);
+                              setResolvedDestName(cand.name);
+                              setEndCoords({ lat: norm.lat, lng: norm.lng });
+                              setFinalRoutingDestCoords({ lat: norm.lat, lng: norm.lng });
+                              setDestDirty(false);
+                            }
+                            setClarificationPrompt(null);
+                          }}
+                          className="w-full px-2.5 py-1.5 rounded bg-[#0A0C0F] hover:bg-[#101317] border border-white/[0.08] text-left flex items-center justify-between gap-2 text-[11px] text-[#F5F7FA] cursor-pointer"
+                        >
+                          <span className="truncate">{cand.name}</span>
+                          <span className="font-mono text-[10px] text-[#929AA5] shrink-0">
+                            {cand.latitude.toFixed(4)}, {cand.longitude.toFixed(4)}
+                          </span>
+                        </button>
+                      ))}
+                    </div>
+                  </div>
+                )}
+
+                {/* Preset Corridors + Update Action */}
+                <div className="flex flex-wrap items-center justify-between gap-2 pt-1">
+                  <div className="flex flex-wrap items-center gap-1">
+                    {ROUTE_PRESETS.slice(0, 4).map((preset) => (
+                      <button
+                        key={preset.id}
+                        type="button"
+                        onClick={() => {
+                          const normOrig = ensureLatLngOrder(preset.start.lat, preset.start.lng);
+                          const normDest = ensureLatLngOrder(preset.end.lat, preset.end.lng);
+                          setStartName(preset.start.name);
+                          setResolvedOriginName(preset.start.name);
+                          setStartCoords({ lat: normOrig.lat, lng: normOrig.lng });
+                          setOriginDirty(false);
+
+                          setOriginalUserDestInput(preset.end.name.split('(')[0].trim());
+                          setEndName(preset.end.name);
+                          setResolvedDestName(preset.end.name);
+                          setEndCoords({ lat: normDest.lat, lng: normDest.lng });
+                          setFinalRoutingDestCoords({ lat: normDest.lat, lng: normDest.lng });
+                          setDestDirty(false);
+                          setClarificationPrompt(null);
+                          setError(null);
+                        }}
+                        className="px-2 py-0.5 rounded bg-[#050607] hover:bg-[#15191E] border border-white/[0.07] text-[10px] text-[#929AA5] hover:text-[#F5F7FA] transition-colors duration-150 cursor-pointer whitespace-nowrap"
+                      >
+                        {preset.label}
+                      </button>
+                    ))}
+                  </div>
+
+                  <button
+                    type="button"
+                    onClick={resolveAndApplyJourneyInputs}
+                    className="urbanshield-interactive-btn px-3 py-1 rounded-md bg-[#00D9F5] hover:bg-[#00D9F5]/90 text-[#050607] font-semibold text-[11px] cursor-pointer"
+                  >
+                    Update
+                  </button>
+                </div>
+              </div>
+            )}
+
+            {error && (
+              <div className="p-3 rounded-xl bg-[#FF4148]/10 border border-[#FF4148]/30 text-xs text-[#FF4148]">
+                {error}
+              </div>
+            )}
+
+            {/* THREE COMPACT ROUTE CARDS */}
+            <div className="space-y-3">
+              {loading && routes.length === 0
+                ? [0, 1, 2].map((skeletonIdx) => (
+                    <div
+                      key={skeletonIdx}
+                      className="p-4 rounded-xl bg-[#101317] border border-white/[0.06] animate-pulse space-y-2.5"
+                    >
+                      <div className="h-4 w-44 bg-[#15191E] rounded" />
+                      <div className="h-3 w-full bg-[#15191E] rounded" />
+                      <div className="h-3 w-4/5 bg-[#15191E] rounded" />
+                      <div className="h-8 w-full bg-[#15191E] rounded-lg mt-2" />
+                    </div>
+                  ))
+                : routes.slice(0, 3).map((route, idx) => {
+                    const isSelected = route.id === selectedRoute?.id;
+                    const isRec = route.isRecommended;
+                    const distKm = (route.distanceMeters / 1000).toFixed(1);
+                    const mins = Math.max(1, Math.round(route.durationSeconds / 60));
+                    const openPlacesCount =
+                      route.nightActivity.factors.establishmentsCount +
+                      route.nearbyPoisCount.hospitals +
+                      route.nearbyPoisCount.police;
+
+                    return (
+                      <div
+                        key={route.id}
+                        onClick={() => handleSelectRoute(route)}
+                        role="button"
+                        tabIndex={0}
+                        onKeyDown={(e) => {
+                          if (e.key === 'Enter' || e.key === ' ') {
+                            e.preventDefault();
+                            handleSelectRoute(route);
+                          }
+                        }}
+                        className={`urbanshield-card-enter stagger-${
+                          idx + 1
+                        } urbanshield-surface-hover group relative rounded-xl p-4 text-left cursor-pointer select-none ${
+                          isRec
+                            ? isSelected
+                              ? 'bg-[#101317] border border-[#00D9F5] shadow-[0_0_24px_-6px_rgba(0,217,245,0.22)]'
+                              : 'bg-[#101317]/80 border border-[#00D9F5]/40 hover:border-[#00D9F5]'
+                            : isSelected
+                            ? 'bg-[#101317] border border-white/50 shadow-[0_0_18px_-8px_rgba(255,255,255,0.16)]'
+                            : 'bg-[#101317]/60 border border-white/[0.06] hover:border-white/[0.15] hover:bg-[#101317]'
+                        }`}
+                      >
+                        {/* Title Line: e.g. "Safest route · 12 min · 4.7 km" */}
+                        <div className="flex items-baseline justify-between gap-2">
+                          <div className="flex items-baseline flex-wrap gap-x-1.5">
+                            <span
+                              className={`font-display text-base font-bold tracking-tight ${
+                                isRec ? 'text-[#00D9F5]' : 'text-[#F5F7FA]'
+                              }`}
+                            >
+                              {getDisplayRouteTitle(route)}
+                            </span>
+                            <span className="text-[#F5F7FA] font-display text-base font-bold">
+                              ·
+                            </span>
+                            <span className="font-mono text-base font-bold text-[#F5F7FA] tabular-nums">
+                              {mins} min
+                            </span>
+                            <span className="text-[#929AA5] text-xs font-mono tabular-nums">
+                              · {distKm} km
+                            </span>
+                          </div>
+
+                          {route.nightActivity.overallScore !== null && (
+                            <span
+                              className={`font-mono text-[11px] tabular-nums shrink-0 ${
+                                isRec ? 'text-[#F59E0B]' : 'text-[#929AA5]'
+                              }`}
+                            >
+                              Score {route.nightActivity.overallScore}
+                            </span>
+                          )}
+                        </div>
+
+                        {/* Concise comparative description */}
+                        <p className="mt-2 text-xs text-[#F5F7FA]/85 leading-relaxed">
+                          {getDynamicNarrative(route)}
+                        </p>
+
+                        {/* Two concise factual bullets */}
+                        <ul className="mt-2.5 space-y-1 text-[11px] text-[#929AA5]">
+                          <li className="flex items-start gap-2">
+                            <span className="text-[#929AA5] leading-tight">•</span>
+                            <span>
+                              <strong className="text-[#F5F7FA] font-medium tabular-nums">
+                                {openPlacesCount} places
+                              </strong>{' '}
+                              listed as open around your passing time
+                            </span>
+                          </li>
+                          <li className="flex items-start gap-2">
+                            <span className="text-[#929AA5] leading-tight">•</span>
+                            <span>
+                              <strong className="text-[#F5F7FA] font-medium tabular-nums">
+                                {route.documentedHelpPointsCount} listed open help points
+                              </strong>{' '}
+                              · longest gap {formatGapLabel(route.longestGapBetweenHelpPointsKm)}
+                            </span>
+                          </li>
+                        </ul>
+
+                        {/* Action Button inside Card */}
+                        <button
+                          type="button"
+                          onClick={(e) => {
+                            e.stopPropagation();
+                            handleSelectRoute(route);
+                          }}
+                          className={`urbanshield-interactive-btn mt-3.5 w-full py-2 px-3 rounded-lg border text-xs font-semibold cursor-pointer flex items-center justify-center gap-1.5 ${
+                            isSelected
+                              ? isRec
+                                ? 'bg-[#00D9F5]/15 border-[#00D9F5] text-[#00D9F5]'
+                                : 'bg-white/10 border-white/50 text-[#F5F7FA]'
+                              : 'bg-[#15191E] hover:bg-[#1C2128] border-white/[0.08] text-[#F5F7FA]'
+                          }`}
+                        >
+                          {isSelected && <Check className="w-3.5 h-3.5 shrink-0" />}
+                          <span>{getCardActionLabel(route, isSelected)}</span>
+                        </button>
+                      </div>
+                    );
+                  })}
             </div>
-          )}
-        </section>
+          </div>
+        </div>
+
+        {/* RIGHT COLUMN: Large Map Container */}
+        <div
+          className={`${
+            isMapFullScreen ? 'lg:col-span-12' : 'lg:col-span-7 xl:col-span-8'
+          } flex flex-col justify-between bg-[#0A0C0F] border border-white/[0.07] rounded-2xl p-4 sm:p-5 transition-all duration-200 ${
+            selectedRoute?.isRecommended
+              ? 'shadow-[0_0_28px_-12px_rgba(0,217,245,0.2)]'
+              : 'shadow-[0_0_28px_-12px_rgba(255,255,255,0.06)]'
+          }`}
+        >
+          {/* Map Top Header Bar: Region Label + Full screen Button + Route Pill Switcher */}
+          <div className="space-y-3 mb-3">
+            <div className="flex items-center justify-between gap-2">
+              <div className="flex items-center gap-1.5 text-xs text-[#929AA5]">
+                <MapPin className="w-3.5 h-3.5 text-[#929AA5] shrink-0" />
+                <span>Chandigarh · Mohali Corridor</span>
+              </div>
+
+              <button
+                type="button"
+                onClick={() => setIsMapFullScreen((prev) => !prev)}
+                className="urbanshield-interactive-btn inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-[#101317] hover:bg-[#15191E] border border-white/[0.08] text-xs font-medium text-[#F5F7FA] cursor-pointer"
+              >
+                {isMapFullScreen ? (
+                  <>
+                    <Minimize2 className="w-3.5 h-3.5 text-[#929AA5]" />
+                    <span>Exit full screen</span>
+                  </>
+                ) : (
+                  <>
+                    <Maximize2 className="w-3.5 h-3.5 text-[#929AA5]" />
+                    <span>Full screen</span>
+                  </>
+                )}
+              </button>
+            </div>
+
+            {/* Route Quick Switcher Pills inside Map Card */}
+            {routes.length > 0 && (
+              <div className="flex flex-wrap items-center gap-2">
+                {routes.slice(0, 3).map((route) => {
+                  const isSelected = route.id === selectedRoute?.id;
+                  const isRec = route.isRecommended;
+                  const mins = Math.max(1, Math.round(route.durationSeconds / 60));
+
+                  return (
+                    <button
+                      key={`pill-${route.id}`}
+                      type="button"
+                      onClick={() => handleSelectRoute(route)}
+                      className={`urbanshield-interactive-btn inline-flex items-center gap-1.5 px-3.5 py-2 rounded-xl text-xs font-medium cursor-pointer whitespace-nowrap ${
+                        isSelected
+                          ? isRec
+                            ? 'bg-[#101317] border-2 border-[#00D9F5] text-[#F5F7FA] shadow-[0_0_12px_rgba(0,217,245,0.2)]'
+                            : 'bg-[#101317] border-2 border-[#F5F7FA] text-[#F5F7FA]'
+                          : 'bg-[#101317]/60 border border-white/[0.07] text-[#929AA5] hover:text-[#F5F7FA] hover:border-white/[0.15]'
+                      }`}
+                    >
+                      {isSelected && (
+                        <Check
+                          className={`w-3.5 h-3.5 shrink-0 ${
+                            isRec ? 'text-[#00D9F5]' : 'text-[#F5F7FA]'
+                          }`}
+                        />
+                      )}
+                      <span>
+                        {getDisplayRouteTitle(route)} ·{' '}
+                        <span className="font-mono tabular-nums">{mins} min</span>
+                      </span>
+                    </button>
+                  );
+                })}
+              </div>
+            )}
+          </div>
+
+          {/* Interactive Leaflet Map Viewport with Smooth Loading Overlay */}
+          <div className="relative flex-1 min-h-[440px] lg:min-h-[540px] rounded-xl overflow-hidden">
+            {loading && (
+              <div className="absolute inset-0 z-[500] bg-[#050607]/60 backdrop-blur-[2px] flex items-center justify-center transition-opacity duration-200">
+                <div className="px-4 py-2 rounded-lg bg-[#101317] border border-white/[0.08] text-xs font-mono text-[#00D9F5] flex items-center gap-2 shadow-xl">
+                  <span className="w-2 h-2 rounded-full bg-[#00D9F5] animate-ping" />
+                  <span>Calculating road network geometry...</span>
+                </div>
+              </div>
+            )}
+
+            <InteractiveCityMap
+              center={CHANDIGARH_CENTER}
+              userLocation={userLocation}
+              pois={pois}
+              reports={reports}
+              crimeRecords={[]}
+              activeLayers={activeMapLayers}
+              selectedPoi={null}
+              onSelectPoi={() => {}}
+              routes={routes}
+              selectedRouteId={selectedRoute?.id}
+              onSelectRoute={(id) => {
+                const found = routes.find((r) => r.id === id);
+                if (found) handleSelectRoute(found);
+              }}
+              originCoords={{ lat: startCoords.lat, lng: startCoords.lng, label: shortOriginName }}
+              destinationCoords={{
+                lat: finalRoutingDestCoords.lat,
+                lng: finalRoutingDestCoords.lng,
+                label: shortDestName,
+              }}
+              heightClass="h-full min-h-[440px] lg:min-h-[540px]"
+              maxMarkers={40}
+            />
+          </div>
+
+          {/* Minimal Bottom Metrics & Endpoint Bar */}
+          <div className="mt-3 pt-2.5 border-t border-white/[0.06] space-y-1.5">
+            {/* Row 1: Endpoints A & B + Minimal Route Metrics */}
+            <div className="flex flex-wrap items-center justify-between gap-x-6 gap-y-1.5 text-xs">
+              <div className="flex items-center gap-4 min-w-0">
+                <div className="flex items-center gap-1.5 truncate">
+                  <span className="font-mono font-bold text-[#F5F7FA]">A</span>
+                  <span className="text-[#929AA5] truncate max-w-[180px] sm:max-w-[240px]">
+                    {shortOriginName}
+                  </span>
+                </div>
+                <div className="flex items-center gap-1.5 truncate">
+                  <span className="font-mono font-bold text-[#F5F7FA]">B</span>
+                  <span className="text-[#929AA5] truncate max-w-[180px] sm:max-w-[240px]">
+                    {shortDestName}
+                  </span>
+                </div>
+              </div>
+
+              {selectedRoute && (
+                <div className="flex items-center gap-3 text-[11px] font-mono text-[#929AA5] tabular-nums">
+                  <span className="text-[#F5F7FA] font-semibold">
+                    {(selectedRoute.distanceMeters / 1000).toFixed(1)} km
+                  </span>
+                  <span>·</span>
+                  <span>{selectedRoute.mainRoadCoveragePercent}% main road</span>
+                  <span>·</span>
+                  <span>{selectedRoute.documentedHelpPointsCount} help points</span>
+                  <span>·</span>
+                  <span>
+                    gap {formatGapLabel(selectedRoute.longestGapBetweenHelpPointsKm)}
+                  </span>
+                </div>
+              )}
+            </div>
+
+            {/* Row 2: Highlight Caption */}
+            <div className="flex flex-wrap items-center justify-between gap-2 text-xs text-[#929AA5]">
+              <p>
+                <span className="text-[#F5F7FA] font-medium">
+                  {selectedRoute ? getDisplayRouteTitle(selectedRoute) : 'Safest route'}
+                </span>{' '}
+                is highlighted.{' '}
+                <span className="text-[#929AA5]">Tap another option to compare.</span>
+              </p>
+              <span className="text-[11px] text-[#929AA5]/70 underline decoration-white/15">
+                © OpenStreetMap contributors
+              </span>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      {/* Progressive Disclosure: Hide detailed analytical breakdowns behind "Route details" */}
+      {selectedRoute && (
+        <ExpandableDetails
+          label="Route details"
+          openLabel="Hide route details"
+          variant="pill"
+          storageKey="smart_routes_details"
+          contentClassName="pt-4"
+        >
+          <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4 bg-[#0A0C0F] border border-white/[0.06] rounded-2xl p-5 text-xs">
+            {/* 1. Emergency Facility Breakdown */}
+            <div className="space-y-2">
+              <div className="text-[11px] font-mono uppercase tracking-wider text-[#00D9F5]">
+                Emergency facility breakdown
+              </div>
+              <div className="grid grid-cols-2 gap-2 text-[#929AA5]">
+                <div>
+                  Hospitals / Clinics:{' '}
+                  <strong className="text-[#F5F7FA] font-mono">
+                    {selectedRoute.nearbyPoisCount.hospitals}
+                  </strong>
+                </div>
+                <div>
+                  Police Stations:{' '}
+                  <strong className="text-[#F5F7FA] font-mono">
+                    {selectedRoute.nearbyPoisCount.police}
+                  </strong>
+                </div>
+                <div>
+                  Pharmacies:{' '}
+                  <strong className="text-[#F5F7FA] font-mono">
+                    {selectedRoute.nearbyPoisCount.pharmacies}
+                  </strong>
+                </div>
+                <div>
+                  24/7 Fuel / Commercial:{' '}
+                  <strong className="text-[#F5F7FA] font-mono">
+                    {selectedRoute.nearbyPoisCount.activeEstablishments}
+                  </strong>
+                </div>
+              </div>
+              <p className="text-[11px] text-[#929AA5] leading-relaxed">
+                {selectedRoute.nightActivity.activitySummary}
+              </p>
+            </div>
+
+            {/* 2. Main-Road Coverage & Longest Help-Point Gap */}
+            <div className="space-y-2">
+              <div className="text-[11px] font-mono uppercase tracking-wider text-[#F59E0B]">
+                Main-road coverage &amp; help-point gap
+              </div>
+              <div className="space-y-1 text-[#929AA5]">
+                <div>
+                  Primary road share:{' '}
+                  <strong className="text-[#F5F7FA] font-mono">
+                    {selectedRoute.mainRoadCoveragePercent}%
+                  </strong>{' '}
+                  ({selectedRoute.summaryRoads})
+                </div>
+                <div>
+                  Longest help-point gap:{' '}
+                  <strong className="text-[#F5F7FA] font-mono">
+                    {formatGapLabel(selectedRoute.longestGapBetweenHelpPointsKm)}
+                  </strong>{' '}
+                  across {selectedRoute.documentedHelpPointsCount} documented help points
+                </div>
+              </div>
+              <p className="text-[11px] text-[#929AA5] leading-relaxed">
+                {selectedRoute.nightActivity.infrastructureSummary}
+              </p>
+            </div>
+
+            {/* 3. Activity Scoring Methodology, Crime Exposure & Data Confidence */}
+            <div className="space-y-2">
+              <div className="text-[11px] font-mono uppercase tracking-wider text-emerald-400">
+                Methodology, crime context &amp; confidence
+              </div>
+              <div className="space-y-1 text-[#929AA5]">
+                <div>
+                  Data confidence:{' '}
+                  <strong className="text-[#F5F7FA] font-mono">
+                    {selectedRoute.nightActivity.confidencePercentage}%
+                  </strong>{' '}
+                  ({selectedRoute.nightActivity.confidenceTier})
+                </div>
+                <div className="text-[11px] leading-relaxed">
+                  {selectedRoute.nightActivity.historicalCrimeExposure}
+                </div>
+              </div>
+              <p className="text-[11px] text-[#929AA5] leading-relaxed">
+                Weights: Commercial ({selectedRoute.nightActivity.weightsUsed.establishments}%),
+                Main roads ({selectedRoute.nightActivity.weightsUsed.mainRoads}%), Emergency (
+                {selectedRoute.nightActivity.weightsUsed.emergencyServices}%), Transit (
+                {selectedRoute.nightActivity.weightsUsed.transport}%), Lighting (
+                {selectedRoute.nightActivity.weightsUsed.streetlights}%). Never claims guaranteed
+                safety.
+              </p>
+            </div>
+          </div>
+        </ExpandableDetails>
       )}
     </div>
   );

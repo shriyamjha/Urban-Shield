@@ -31,6 +31,7 @@ interface InteractiveCityMapProps {
   activeLayers: Set<MapLayerCategory>;
   selectedPoi: CityPoi | null;
   onSelectPoi: (poi: CityPoi) => void;
+  onSelectCrimeRecord?: (rec: HistoricalCrimeRecord) => void;
   routes?: SmartRouteOption[];
   selectedRouteId?: string;
   onSelectRoute?: (routeId: string) => void;
@@ -122,29 +123,30 @@ function getEndpointIcon(kind: 'origin' | 'destination' | 'user'): L.DivIcon {
     return icon;
   }
 
-  const bg = kind === 'origin' ? '#00D2FF' : '#F59E0B';
+  const bg = kind === 'origin' ? '#3B82F6' : '#EF4444';
   const letter = kind === 'origin' ? 'A' : 'B';
+  const shadowColor = kind === 'origin' ? 'rgba(59,130,246,0.4)' : 'rgba(239,68,68,0.4)';
 
   const icon = L.divIcon({
     className: 'urbanshield-endpoint-marker',
     html: `<div style="
-      width:28px;
-      height:28px;
-      border-radius:6px;
+      width:24px;
+      height:24px;
+      border-radius:9999px;
       background:${bg};
-      border:2px solid #08090B;
-      box-shadow:0 4px 14px rgba(0,0,0,0.85);
-      color:#08090B;
-      font-family:'JetBrains Mono',monospace;
-      font-weight:800;
-      font-size:12px;
+      border:2px solid #FFFFFF;
+      box-shadow:0 0 0 3px ${shadowColor}, 0 3px 10px rgba(0,0,0,0.85);
+      color:#FFFFFF;
+      font-family:'Plus Jakarta Sans',sans-serif;
+      font-weight:700;
+      font-size:11px;
       display:flex;
       align-items:center;
       justify-content:center;
     ">${letter}</div>`,
-    iconSize: [28, 28],
-    iconAnchor: [14, 14],
-    popupAnchor: [0, -14],
+    iconSize: [24, 24],
+    iconAnchor: [12, 12],
+    popupAnchor: [0, -12],
   });
   iconCache.set(key, icon);
   return icon;
@@ -154,9 +156,11 @@ const MapViewportController: React.FC<{
   center: [number, number];
   zoom: number;
   routes: SmartRouteOption[];
+  originCoords?: { lat: number; lng: number; label?: string };
+  destinationCoords?: { lat: number; lng: number; label?: string };
   selectedPoi: CityPoi | null;
   onMapClickCoordinates?: (lat: number, lng: number) => void;
-}> = ({ center, zoom, routes, selectedPoi, onMapClickCoordinates }) => {
+}> = ({ center, zoom, routes, originCoords, destinationCoords, selectedPoi, onMapClickCoordinates }) => {
   const map = useMap();
 
   useMapEvents({
@@ -191,21 +195,31 @@ const MapViewportController: React.FC<{
     }
   }, [selectedPoi, map]);
 
-  // Fit bounds when routes change
+  // Fit bounds when routes or endpoint markers change
   useEffect(() => {
+    const allLatLngs: [number, number][] = [];
+    if (originCoords && Number.isFinite(originCoords.lat) && Number.isFinite(originCoords.lng)) {
+      allLatLngs.push([originCoords.lat, originCoords.lng]);
+    }
+    if (
+      destinationCoords &&
+      Number.isFinite(destinationCoords.lat) &&
+      Number.isFinite(destinationCoords.lng)
+    ) {
+      allLatLngs.push([destinationCoords.lat, destinationCoords.lng]);
+    }
     if (routes.length > 0 && routes[0].geometry.length > 1) {
-      const allLatLngs: [number, number][] = [];
       for (const r of routes) {
         for (const [lng, lat] of r.geometry) {
           allLatLngs.push([lat, lng]);
         }
       }
-      if (allLatLngs.length > 1) {
-        const bounds = L.latLngBounds(allLatLngs);
-        map.fitBounds(bounds, { padding: [42, 42], maxZoom: 15 });
-      }
     }
-  }, [routes, map]);
+    if (allLatLngs.length > 1) {
+      const bounds = L.latLngBounds(allLatLngs);
+      map.fitBounds(bounds, { padding: [42, 42], maxZoom: 15 });
+    }
+  }, [routes, originCoords?.lat, originCoords?.lng, destinationCoords?.lat, destinationCoords?.lng, map]);
 
   return null;
 };
@@ -221,6 +235,7 @@ export const InteractiveCityMap: React.FC<InteractiveCityMapProps> = ({
   activeLayers,
   selectedPoi,
   onSelectPoi,
+  onSelectCrimeRecord,
   routes = [],
   selectedRouteId,
   onSelectRoute,
@@ -251,7 +266,7 @@ export const InteractiveCityMap: React.FC<InteractiveCityMapProps> = ({
 
   return (
     <div
-      className={`relative w-full ${heightClass} rounded-lg overflow-hidden border border-[#22262E] bg-[#08090B]`}
+      className={`relative w-full ${heightClass} rounded-2xl overflow-hidden border border-white/[0.07] bg-[#050607] urbanshield-map-fade`}
     >
       <MapContainer
         center={[center[1], center[0]]}
@@ -263,6 +278,8 @@ export const InteractiveCityMap: React.FC<InteractiveCityMapProps> = ({
           center={center}
           zoom={zoom}
           routes={routes}
+          originCoords={originCoords}
+          destinationCoords={destinationCoords}
           selectedPoi={selectedPoi}
           onMapClickCoordinates={onMapClickCoordinates}
         />
@@ -300,41 +317,42 @@ export const InteractiveCityMap: React.FC<InteractiveCityMapProps> = ({
             : isDistrict
             ? '#F59E0B'
             : rec.incidentCount && rec.incidentCount >= 100
-            ? '#EF4444'
-            : '#F97316';
+            ? '#FF4148'
+            : '#F59E0B';
 
           return (
             <Circle
               key={rec.id}
               center={[rec.latitude, rec.longitude]}
               radius={rec.radiusMeters}
+              eventHandlers={{
+                click: () => {
+                  if (onSelectCrimeRecord) onSelectCrimeRecord(rec);
+                },
+              }}
               pathOptions={{
                 color: strokeColor,
                 weight: isDistrict || isInsufficient ? 1.5 : 2,
                 dashArray: isDistrict || isInsufficient ? '6 6' : undefined,
                 fillColor: strokeColor,
-                fillOpacity: isInsufficient ? 0.08 : isDistrict ? 0.07 : 0.22,
+                fillOpacity: isInsufficient ? 0.08 : isDistrict ? 0.07 : 0.18,
               }}
             >
               <Popup>
-                <div className="p-3 min-w-[230px] space-y-1.5 text-xs bg-[#111316] text-white">
-                  <div className="flex items-center justify-between text-[10px] font-mono text-[#8A909E]">
-                    <span>{rec.year} RECORD</span>
+                <div className="p-3 min-w-[220px] space-y-1.5 text-xs bg-[#101317] text-[#F5F7FA]">
+                  <div className="flex items-center justify-between text-[10px] font-mono text-[#929AA5]">
+                    <span>{rec.year}</span>
                     <span>{rec.geographicGranularity.toUpperCase().replace('_', ' ')}</span>
                   </div>
-                  <div className="font-semibold text-white">{rec.policeStation}</div>
-                  <div className="text-[11px] text-[#9CA3AF]">{rec.sectorOrLocality}</div>
-                  <div className="pt-1 border-t border-[#22262E] flex items-center justify-between font-mono">
-                    <span className="text-[#8A909E]">{rec.crimeCategory}:</span>
-                    <span className="text-white font-semibold">
+                  <div className="font-semibold text-[#F5F7FA]">{rec.policeStation}</div>
+                  <div className="text-[11px] text-[#929AA5]">{rec.sectorOrLocality}</div>
+                  <div className="pt-1.5 border-t border-white/[0.07] flex items-center justify-between font-mono">
+                    <span className="text-[#929AA5]">{rec.crimeCategory}:</span>
+                    <span className="text-[#F5F7FA] font-semibold">
                       {rec.incidentCount !== null
-                        ? `${rec.incidentCount} recorded FIRs`
+                        ? `${rec.incidentCount} FIRs`
                         : 'Insufficient granular data'}
                     </span>
-                  </div>
-                  <div className="text-[10px] text-[#8A909E] leading-relaxed">{rec.notes}</div>
-                  <div className="text-[10px] font-mono text-[#00D2FF] pt-0.5">
-                    Source: {rec.source}
                   </div>
                 </div>
               </Popup>
@@ -342,7 +360,7 @@ export const InteractiveCityMap: React.FC<InteractiveCityMapProps> = ({
           );
         })}
 
-        {/* Route Polylines (Unselected alternatives first, then selected route on top) */}
+        {/* Route Polylines (Unselected alternatives first, then selected route on top with subtle glow) */}
         {routes
           .slice()
           .sort((a, b) => (a.id === selectedRouteId ? 1 : b.id === selectedRouteId ? -1 : 0))
@@ -350,38 +368,54 @@ export const InteractiveCityMap: React.FC<InteractiveCityMapProps> = ({
             const isSelected = route.id === selectedRouteId;
             const latLngs: [number, number][] = route.geometry.map(([lng, lat]) => [lat, lng]);
             const strokeColor = route.isRecommended
-              ? '#F59E0B' // Gold/Amber for Recommended route
+              ? '#00D2FF' // Electric Cyan for Recommended / Safest route
               : route.type === 'fastest'
-              ? '#00D2FF' // Electric Cyan for Fastest route
+              ? '#F87171' // Coral Red-Orange for Fastest route
               : '#10B981'; // Emerald for Higher Activity route
 
             return (
-              <Polyline
-                key={route.id}
-                positions={latLngs}
-                pathOptions={{
-                  color: isSelected ? strokeColor : '#6B7280',
-                  weight: isSelected ? 5.5 : 3.5,
-                  opacity: isSelected ? 0.96 : 0.45,
-                  dashArray: isSelected ? undefined : '6 6',
-                }}
-                eventHandlers={{
-                  click: () => {
-                    if (onSelectRoute) onSelectRoute(route.id);
-                  },
-                }}
-              >
-                <Popup>
-                  <div className="p-2.5 text-xs bg-[#111316] text-white space-y-1">
-                    <div className="font-semibold">{route.label}</div>
-                    <div className="font-mono text-[11px] text-[#9CA3AF]">
-                      {(route.distanceMeters / 1000).toFixed(1)} km · ~
-                      {Math.max(1, Math.round(route.durationSeconds / 60))} min · Activity:{' '}
-                      {route.nightActivity.overallScore ?? 'N/A'}/100
+              <React.Fragment key={route.id}>
+                {isSelected && (
+                  <Polyline
+                    positions={latLngs}
+                    pathOptions={{
+                      color: strokeColor,
+                      weight: 12,
+                      opacity: 0.22,
+                      lineCap: 'round',
+                      lineJoin: 'round',
+                    }}
+                    interactive={false}
+                  />
+                )}
+                <Polyline
+                  positions={latLngs}
+                  pathOptions={{
+                    color: isSelected ? strokeColor : '#525866',
+                    weight: isSelected ? 4.5 : 3,
+                    opacity: isSelected ? 0.98 : 0.42,
+                    lineCap: 'round',
+                    lineJoin: 'round',
+                    className: isSelected && route.isRecommended ? 'urbanshield-route-glow-cyan' : undefined,
+                  }}
+                  eventHandlers={{
+                    click: () => {
+                      if (onSelectRoute) onSelectRoute(route.id);
+                    },
+                  }}
+                >
+                  <Popup>
+                    <div className="p-2.5 text-xs bg-[#111316] text-white space-y-1">
+                      <div className="font-semibold">{route.label}</div>
+                      <div className="font-mono text-[11px] text-[#9CA3AF]">
+                        {(route.distanceMeters / 1000).toFixed(1)} km · ~
+                        {Math.max(1, Math.round(route.durationSeconds / 60))} min · Activity:{' '}
+                        {route.nightActivity.overallScore ?? 'N/A'}/100
+                      </div>
                     </div>
-                  </div>
-                </Popup>
-              </Polyline>
+                  </Popup>
+                </Polyline>
+              </React.Fragment>
             );
           })}
 
@@ -407,9 +441,12 @@ export const InteractiveCityMap: React.FC<InteractiveCityMapProps> = ({
             icon={getEndpointIcon('origin')}
           >
             <Popup>
-              <div className="p-2.5 text-xs bg-[#111316] text-white">
-                <div className="text-[10px] font-mono text-[#00D2FF]">ORIGIN (A)</div>
-                <div className="font-semibold mt-0.5">{originCoords.label || 'Origin'}</div>
+              <div className="p-2.5 text-xs bg-[#111316] text-white space-y-0.5">
+                <div className="text-[10px] font-mono text-[#3B82F6]">ORIGIN (A)</div>
+                <div className="font-semibold">{originCoords.label || 'Origin'}</div>
+                <div className="text-[10px] font-mono text-[#9CA3AF]">
+                  {originCoords.lat.toFixed(5)}° N, {originCoords.lng.toFixed(5)}° E
+                </div>
               </div>
             </Popup>
           </Marker>
@@ -421,10 +458,13 @@ export const InteractiveCityMap: React.FC<InteractiveCityMapProps> = ({
             icon={getEndpointIcon('destination')}
           >
             <Popup>
-              <div className="p-2.5 text-xs bg-[#111316] text-white">
-                <div className="text-[10px] font-mono text-[#F59E0B]">DESTINATION (B)</div>
-                <div className="font-semibold mt-0.5">
+              <div className="p-2.5 text-xs bg-[#111316] text-white space-y-0.5">
+                <div className="text-[10px] font-mono text-[#EF4444]">DESTINATION (B)</div>
+                <div className="font-semibold">
                   {destinationCoords.label || 'Destination'}
+                </div>
+                <div className="text-[10px] font-mono text-[#9CA3AF]">
+                  {destinationCoords.lat.toFixed(5)}° N, {destinationCoords.lng.toFixed(5)}° E
                 </div>
               </div>
             </Popup>
@@ -528,81 +568,56 @@ export const InteractiveCityMap: React.FC<InteractiveCityMapProps> = ({
           ))}
       </MapContainer>
 
-      {/* Top-Right Basemap Switcher (NightWise Dark OSM | Standard OSM | Esri Satellite) */}
-      <div className="absolute top-2.5 right-2.5 z-[400] flex items-center gap-1 bg-[#111316]/95 border border-[#262930] rounded-md p-1 shadow-lg">
-        <button
-          type="button"
-          onClick={() => setTileMode('osm_dark')}
-          className={`flex items-center gap-1 px-2 py-1 rounded text-[11px] font-medium transition-colors cursor-pointer ${
-            tileMode === 'osm_dark'
-              ? 'bg-[#181A1F] text-[#00D2FF] border border-[#00D2FF]/40'
-              : 'text-[#8A909E] hover:text-white'
-          }`}
-        >
-          <Eye className="w-3 h-3" />
-          <span>Dark OSM</span>
-        </button>
-        <button
-          type="button"
-          onClick={() => setTileMode('osm_standard')}
-          className={`flex items-center gap-1 px-2 py-1 rounded text-[11px] font-medium transition-colors cursor-pointer ${
-            tileMode === 'osm_standard'
-              ? 'bg-[#181A1F] text-[#00D2FF] border border-[#00D2FF]/40'
-              : 'text-[#8A909E] hover:text-white'
-          }`}
-        >
-          <Layers className="w-3 h-3" />
-          <span>Standard OSM</span>
-        </button>
-        <button
-          type="button"
-          onClick={() => {
-            setSatelliteFallbackNotice(false);
-            setTileMode('satellite');
-          }}
-          className={`flex items-center gap-1 px-2 py-1 rounded text-[11px] font-medium transition-colors cursor-pointer ${
-            tileMode === 'satellite'
-              ? 'bg-[#181A1F] text-[#00D2FF] border border-[#00D2FF]/40'
-              : 'text-[#8A909E] hover:text-white'
-          }`}
-        >
-          <Globe className="w-3 h-3" />
-          <span>Satellite</span>
-        </button>
-      </div>
-
-      {satelliteFallbackNotice && (
-        <div className="absolute top-12 right-2.5 z-[400] bg-[#111316]/95 border border-amber-500/40 rounded px-2.5 py-1 text-[10px] text-amber-300">
-          Satellite tile unavailable — automatically switched to OpenStreetMap
+      {/* Top-Right Basemap Switcher (only shown on non-route city maps to keep route map clean) */}
+      {routes.length === 0 && (
+        <div className="absolute top-3 right-3 z-[400] flex items-center gap-0.5 bg-[#0A0C0F]/90 backdrop-blur-md border border-white/[0.08] rounded-xl p-1 shadow-xl">
+          <button
+            type="button"
+            onClick={() => setTileMode('osm_dark')}
+            className={`flex items-center gap-1 px-2.5 py-1 rounded-lg text-[11px] font-medium transition-colors cursor-pointer ${
+              tileMode === 'osm_dark'
+                ? 'bg-[#15191E] text-[#00D9F5]'
+                : 'text-[#929AA5] hover:text-[#F5F7FA]'
+            }`}
+          >
+            <Eye className="w-3 h-3" />
+            <span>Dark</span>
+          </button>
+          <button
+            type="button"
+            onClick={() => setTileMode('osm_standard')}
+            className={`flex items-center gap-1 px-2.5 py-1 rounded-lg text-[11px] font-medium transition-colors cursor-pointer ${
+              tileMode === 'osm_standard'
+                ? 'bg-[#15191E] text-[#00D9F5]'
+                : 'text-[#929AA5] hover:text-[#F5F7FA]'
+            }`}
+          >
+            <Layers className="w-3 h-3" />
+            <span>Standard</span>
+          </button>
+          <button
+            type="button"
+            onClick={() => {
+              setSatelliteFallbackNotice(false);
+              setTileMode('satellite');
+            }}
+            className={`flex items-center gap-1 px-2.5 py-1 rounded-lg text-[11px] font-medium transition-colors cursor-pointer ${
+              tileMode === 'satellite'
+                ? 'bg-[#15191E] text-[#00D9F5]'
+                : 'text-[#929AA5] hover:text-[#F5F7FA]'
+            }`}
+          >
+            <Globe className="w-3 h-3" />
+            <span>Satellite</span>
+          </button>
         </div>
       )}
 
-      {/* Bottom-Left Compact Legend */}
-      <div className="absolute bottom-2.5 left-2.5 z-[400] bg-[#08090B]/90 border border-[#22262E] rounded-md px-2.5 py-1.5 text-[10px] text-[#9CA3AF] flex flex-wrap items-center gap-x-3 gap-y-1 max-w-[82%] pointer-events-none">
-        {routes.length > 0 ? (
-          <>
-            <span className="text-white font-mono">
-              <strong className="text-[#F59E0B]">━</strong> Recommended
-            </span>
-            <span className="text-white font-mono">
-              <strong className="text-[#00D2FF]">━</strong> Fastest
-            </span>
-            <span className="text-white font-mono">
-              <strong className="text-[#10B981]">━</strong> Higher Activity
-            </span>
-            <span>·</span>
-          </>
-        ) : null}
-        <span>H Hospital</span>
-        <span>·</span>
-        <span>PS Police</span>
-        <span>·</span>
-        <span>Rx Pharmacy</span>
-        <span>·</span>
-        <span>CC CCTV Node</span>
-        <span>·</span>
-        <span>SL Lighting</span>
-      </div>
+      {satelliteFallbackNotice && (
+        <div className="absolute top-14 right-3 z-[400] bg-[#101317]/95 border border-amber-500/30 rounded-lg px-3 py-1.5 text-[11px] text-amber-300">
+          Satellite tile unavailable — switched to Dark OSM
+        </div>
+      )}
     </div>
   );
 };

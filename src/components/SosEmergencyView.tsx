@@ -20,6 +20,7 @@ import {
 } from '../types/urbanshield.ts';
 import { useAuth } from '../context/AuthContext.tsx';
 import { haversineDistanceKm } from '../data/chandigarhMohaliBaseline.ts';
+import { ExpandableDetails } from './ui/ProgressivePrimitives.tsx';
 
 interface SosEmergencyViewProps {
   userLocation: { lat: number; lng: number };
@@ -129,79 +130,80 @@ export const SosEmergencyView: React.FC<SosEmergencyViewProps> = ({
   );
 
   return (
-    <div className="space-y-4">
-      {/* Top Emergency Command Banner */}
-      <div className="bg-[#111316] border border-[#EF4444]/50 rounded-lg p-5 flex flex-col lg:flex-row lg:items-center justify-between gap-5">
-        <div className="space-y-1.5 max-w-2xl">
-          <div className="flex items-center gap-2 text-[11px] font-mono uppercase tracking-wider text-[#EF4444]">
+    <div className="space-y-5 max-w-6xl mx-auto">
+      {/* Primary Emergency SOS Control Banner */}
+      <div className="urbanshield-card-enter bg-[#0A0C0F] border border-[#FF4148]/35 rounded-2xl p-5 sm:p-6 flex flex-col lg:flex-row lg:items-center justify-between gap-5">
+        <div className="space-y-2 max-w-2xl">
+          <div className="inline-flex items-center gap-2 text-xs font-mono uppercase tracking-wider text-[#FF4148]">
             <Siren className="w-4 h-4" />
-            <span>EMERGENCY ASSISTANCE & RESPONDER COORDINATION</span>
+            <span>Emergency Assistance</span>
           </div>
-          <h2 className="font-display text-xl font-bold text-white">
-            SOS Emergency Response Network
-          </h2>
-          <p className="text-xs text-slate-300 leading-relaxed">
-            Activating SOS initiates a confirmation countdown, captures your GPS coordinates (
-            {userLocation.lat.toFixed(4)}° N, {userLocation.lng.toFixed(4)}° E), logs an emergency
-            record, generates a live location-sharing link for your{' '}
-            <span className="text-white font-semibold">{contacts.length} trusted contact(s)</span>,
-            and alerts opt-in community responders in Chandigarh & Mohali.
+          <h1 className="font-display text-xl sm:text-2xl font-semibold text-[#F5F7FA] tracking-tight">
+            SOS Emergency Response
+          </h1>
+          <p className="text-xs text-[#929AA5] leading-relaxed">
+            Activating SOS starts a confirmation countdown, captures your current GPS coordinates (
+            <span className="font-mono text-[#F5F7FA]">
+              {userLocation.lat.toFixed(4)}° N, {userLocation.lng.toFixed(4)}° E
+            </span>
+            ), shares a live tracking link with your{' '}
+            <span className="text-[#F5F7FA] font-medium">{contacts.length} trusted contact(s)</span>,
+            and notifies nearby community responders.
           </p>
-          <p className="text-[11px] font-mono text-[#F59E0B]">
-            Statutory India Helplines: Police 112 / 100 · Ambulance 108 · Women Helpline 1091.
-          </p>
+          <div className="text-xs font-mono text-[#F59E0B] pt-0.5">
+            Statutory Helplines: Police 112 / 100 · Ambulance 108 · Women Helpline 1091
+          </div>
         </div>
 
         <div className="shrink-0">
           <button
             type="button"
             onClick={onTriggerSosModal}
-            className="w-full lg:w-auto flex items-center justify-center gap-2.5 px-6 py-3.5 rounded-lg bg-[#EF4444] hover:bg-red-500 text-white font-display font-bold text-sm transition-colors cursor-pointer"
+            className="w-full lg:w-auto flex items-center justify-center gap-2.5 px-6 py-3.5 rounded-xl bg-[#FF4148] hover:bg-[#FF4148]/90 text-white font-display font-semibold text-sm transition-all cursor-pointer shadow-lg shadow-[#FF4148]/20"
           >
             <Siren className="w-4 h-4" />
-            <span>TRIGGER SOS COUNTDOWN</span>
+            <span>Trigger Emergency SOS</span>
           </button>
         </div>
       </div>
 
       {feedback && (
-        <div className="p-3 rounded-lg bg-[#181A1F] border border-[#00D2FF]/40 text-xs text-[#00D2FF] flex items-center justify-between">
+        <div className="p-3.5 rounded-xl bg-[#101317] border border-[#00D9F5]/30 text-xs text-[#00D9F5] flex items-center justify-between">
           <span>{feedback}</span>
           <button
             type="button"
             onClick={() => setFeedback(null)}
-            className="underline cursor-pointer"
+            className="text-[#929AA5] hover:text-[#F5F7FA] cursor-pointer"
           >
             Dismiss
           </button>
         </div>
       )}
 
-      {/* Active SOS Incidents Dashboard */}
-      <div className="bg-[#111316] border border-[#22262E] rounded-lg p-4 space-y-3">
-        <div className="flex items-center justify-between pb-2.5 border-b border-[#22262E]">
+      {/* Active SOS Incidents */}
+      <div className="urbanshield-card-enter stagger-1 bg-[#0A0C0F] border border-white/[0.06] rounded-xl p-5 space-y-4">
+        <div className="flex items-center justify-between pb-3 border-b border-white/[0.06]">
           <div>
-            <h3 className="font-display text-xs font-bold uppercase tracking-wider text-white">
-              Live Emergency Incident Feed ({activeIncidents.length} Active)
-            </h3>
-            <p className="text-[11px] text-[#8A909E]">
-              Real-time WebSocket incident feed, responder acknowledgements, and resolution controls.
+            <h2 className="font-display text-sm font-semibold text-[#F5F7FA]">
+              Live Emergency Feed ({activeIncidents.length} active)
+            </h2>
+            <p className="text-xs text-[#929AA5] mt-0.5">
+              Real-time incident status, live location links, and responder acknowledgements.
             </p>
           </div>
-          <span className="text-[11px] font-mono text-[#8A909E]">
-            Total Logged: {sosIncidents.length}
+          <span className="text-xs font-mono text-[#929AA5]">
+            Total logged: {sosIncidents.length}
           </span>
         </div>
 
         {sosIncidents.length === 0 ? (
           <div className="py-8 text-center space-y-1.5">
             <ShieldCheck className="w-6 h-6 text-emerald-400 mx-auto" />
-            <div className="text-xs font-semibold text-white">
-              No Active SOS Emergencies at This Moment
+            <div className="text-xs font-medium text-[#F5F7FA]">
+              No active SOS emergencies
             </div>
-            <p className="text-[11px] text-[#8A909E] max-w-md mx-auto">
-              When SOS is activated, live coordinates, responder acknowledgements, and shareable
-              tracking links appear here immediately.
+            <p className="text-xs text-[#929AA5] max-w-md mx-auto">
+              When SOS is activated, live coordinates, responder acknowledgements, and shareable tracking links appear here immediately.
             </p>
           </div>
         ) : (
@@ -213,21 +215,21 @@ export const SosEmergencyView: React.FC<SosEmergencyViewProps> = ({
               return (
                 <div
                   key={inc.id}
-                  className={`p-3.5 rounded-lg border space-y-2.5 ${
+                  className={`p-4 rounded-xl border space-y-3 ${
                     isActive
-                      ? 'bg-red-950/20 border-[#EF4444]/50'
-                      : 'bg-[#181A1F] border-[#2A2F3A]'
+                      ? 'bg-[#FF4148]/[0.06] border-[#FF4148]/40'
+                      : 'bg-[#101317] border-white/[0.06]'
                   }`}
                 >
                   <div className="flex flex-wrap items-center justify-between gap-2">
                     <div className="flex items-center gap-2 text-xs">
-                      <span className="font-mono font-bold uppercase text-[#EF4444]">
-                        STATUS: {inc.status.toUpperCase()}
+                      <span className="font-mono font-semibold uppercase text-[#FF4148]">
+                        {inc.status}
                       </span>
-                      <span>·</span>
-                      <span className="font-semibold text-white">{inc.userName}</span>
-                      <span>·</span>
-                      <span className="font-mono text-[#8A909E]">
+                      <span className="text-[#929AA5]">·</span>
+                      <span className="font-medium text-[#F5F7FA]">{inc.userName}</span>
+                      <span className="text-[#929AA5]">·</span>
+                      <span className="font-mono text-[#929AA5]">
                         {new Date(inc.createdAt).toLocaleTimeString()}
                       </span>
                     </div>
@@ -237,7 +239,7 @@ export const SosEmergencyView: React.FC<SosEmergencyViewProps> = ({
                         <button
                           type="button"
                           onClick={() => copyShareLink(inc)}
-                          className="flex items-center gap-1.5 px-2.5 py-1 rounded bg-[#181A1F] hover:bg-[#22262E] border border-[#2A2F3A] text-[11px] text-[#00D2FF] cursor-pointer"
+                          className="flex items-center gap-1.5 px-3 py-1 rounded-lg bg-[#15191E] hover:bg-[#1C2128] border border-white/[0.08] text-[11px] text-[#00D9F5] cursor-pointer"
                         >
                           {copiedId === inc.id ? (
                             <>
@@ -254,14 +256,14 @@ export const SosEmergencyView: React.FC<SosEmergencyViewProps> = ({
                         <button
                           type="button"
                           onClick={() => onUpdateIncidentStatus(inc.id, 'resolved')}
-                          className="px-2.5 py-1 rounded bg-emerald-600 hover:bg-emerald-500 text-[11px] font-semibold text-white cursor-pointer"
+                          className="px-3 py-1 rounded-lg bg-emerald-600 hover:bg-emerald-500 text-[11px] font-medium text-white cursor-pointer"
                         >
                           Resolve
                         </button>
                         <button
                           type="button"
                           onClick={() => onUpdateIncidentStatus(inc.id, 'cancelled')}
-                          className="px-2.5 py-1 rounded bg-[#181A1F] hover:bg-[#22262E] border border-[#2A2F3A] text-[11px] text-[#8A909E] cursor-pointer"
+                          className="px-3 py-1 rounded-lg bg-[#15191E] hover:bg-[#1C2128] border border-white/[0.08] text-[11px] text-[#929AA5] cursor-pointer"
                         >
                           Cancel
                         </button>
@@ -269,39 +271,37 @@ export const SosEmergencyView: React.FC<SosEmergencyViewProps> = ({
                     )}
                   </div>
 
-                  <div className="grid grid-cols-1 md:grid-cols-2 gap-2 text-xs text-slate-300">
+                  <div className="grid grid-cols-1 md:grid-cols-2 gap-2 text-xs text-[#F5F7FA]/90">
                     <div className="flex items-center gap-1.5">
-                      <MapPin className="w-3.5 h-3.5 text-[#EF4444] shrink-0" />
+                      <MapPin className="w-3.5 h-3.5 text-[#FF4148] shrink-0" />
                       <span>
                         {inc.areaLabel} ({inc.latitude.toFixed(4)}° N, {inc.longitude.toFixed(4)}° E)
                       </span>
                     </div>
-                    <div className="flex items-center gap-1.5">
+                    <div className="flex items-center gap-1.5 text-[#929AA5]">
                       <AlertTriangle className="w-3.5 h-3.5 text-[#F59E0B] shrink-0" />
                       <span>{inc.notificationChannelDetail}</span>
                     </div>
                   </div>
 
-                  <div className="pt-2 border-t border-[#22262E] flex flex-wrap items-center justify-between gap-2">
-                    <div className="text-[11px] text-slate-300">
+                  <div className="pt-2.5 border-t border-white/[0.06] flex flex-wrap items-center justify-between gap-2">
+                    <div className="text-xs text-[#929AA5]">
                       {inc.responses.length === 0 ? (
-                        <span className="text-[#8A909E]">
-                          Awaiting community responder acknowledgement...
-                        </span>
+                        <span>Awaiting community responder acknowledgement...</span>
                       ) : (
                         <div className="flex flex-wrap gap-3">
                           {inc.responses.map((resp) => (
                             <span key={resp.responderId}>
-                              <strong className="text-white">{resp.responderName}</strong>:{' '}
+                              <strong className="text-[#F5F7FA]">{resp.responderName}</strong>:{' '}
                               <span
                                 className={
                                   resp.action === 'acknowledged'
-                                    ? 'text-emerald-400 font-semibold'
-                                    : 'text-[#8A909E]'
+                                    ? 'text-emerald-400 font-medium'
+                                    : 'text-[#929AA5]'
                                 }
                               >
-                                {resp.action.toUpperCase()}
-                                {resp.etaMinutes ? ` (ETA ~${resp.etaMinutes}m)` : ''}
+                                {resp.action}
+                                {resp.etaMinutes ? ` (~${resp.etaMinutes}m)` : ''}
                               </span>
                             </span>
                           ))}
@@ -314,7 +314,7 @@ export const SosEmergencyView: React.FC<SosEmergencyViewProps> = ({
                         <button
                           type="button"
                           onClick={() => onRespondToIncident(inc.id, 'acknowledged')}
-                          className="flex items-center gap-1 px-2.5 py-1 rounded bg-emerald-500/15 border border-emerald-500/40 text-[11px] font-medium text-emerald-300 cursor-pointer"
+                          className="flex items-center gap-1 px-3 py-1 rounded-lg bg-emerald-500/15 border border-emerald-500/35 text-[11px] font-medium text-emerald-300 cursor-pointer"
                         >
                           <CheckCircle2 className="w-3 h-3" />
                           <span>Acknowledge</span>
@@ -322,7 +322,7 @@ export const SosEmergencyView: React.FC<SosEmergencyViewProps> = ({
                         <button
                           type="button"
                           onClick={() => onRespondToIncident(inc.id, 'declined')}
-                          className="flex items-center gap-1 px-2.5 py-1 rounded bg-[#181A1F] border border-[#2A2F3A] text-[11px] text-[#8A909E] cursor-pointer"
+                          className="flex items-center gap-1 px-3 py-1 rounded-lg bg-[#15191E] border border-white/[0.08] text-[11px] text-[#929AA5] cursor-pointer"
                         >
                           <XCircle className="w-3 h-3" />
                           <span>Decline</span>
@@ -337,147 +337,107 @@ export const SosEmergencyView: React.FC<SosEmergencyViewProps> = ({
         )}
       </div>
 
-      {/* Bottom Split: Trusted Contacts + Community Responders */}
-      <div className="grid grid-cols-1 lg:grid-cols-12 gap-4">
-        <div className="lg:col-span-6 bg-[#111316] border border-[#22262E] rounded-lg p-4 space-y-3">
-          <div className="flex items-center justify-between pb-2.5 border-b border-[#22262E]">
+      {/* Two-Column Trusted Contacts & Responders with Progressive Disclosure for Forms */}
+      <div className="urbanshield-card-enter stagger-2 grid grid-cols-1 lg:grid-cols-2 gap-4 items-start">
+        {/* Trusted Emergency Contacts */}
+        <div className="bg-[#0A0C0F] border border-white/[0.06] rounded-xl p-5 space-y-4">
+          <div className="flex items-center justify-between">
             <div className="flex items-center gap-2">
-              <Users className="w-3.5 h-3.5 text-[#00D2FF]" />
-              <h3 className="font-display text-xs font-bold uppercase tracking-wider text-white">
-                Private Trusted Emergency Contacts ({contacts.length})
+              <Users className="w-4 h-4 text-[#00D9F5]" />
+              <h3 className="font-display text-sm font-semibold text-[#F5F7FA]">
+                Trusted Contacts ({contacts.length})
               </h3>
             </div>
-            <span className="text-[10px] font-mono text-[#8A909E]">PRIVATE ACCOUNT SCOPE</span>
+            <span className="text-[11px] text-[#929AA5]">Private account</span>
           </div>
 
-          <form onSubmit={handleAddContact} className="grid grid-cols-1 sm:grid-cols-2 gap-2">
-            <input
-              type="text"
-              value={contactName}
-              onChange={(e) => setContactName(e.target.value)}
-              placeholder="Contact Full Name *"
-              required
-              className="bg-[#181A1F] border border-[#2A2F3A] rounded px-3 py-1.5 text-xs text-white"
-            />
-            <input
-              type="text"
-              value={contactRelationship}
-              onChange={(e) => setContactRelationship(e.target.value)}
-              placeholder="Relationship (e.g., Family)"
-              className="bg-[#181A1F] border border-[#2A2F3A] rounded px-3 py-1.5 text-xs text-white"
-            />
-            <input
-              type="tel"
-              value={contactPhone}
-              onChange={(e) => setContactPhone(e.target.value)}
-              placeholder="+91 98150 12345 *"
-              required
-              className="bg-[#181A1F] border border-[#2A2F3A] rounded px-3 py-1.5 text-xs text-white font-mono"
-            />
-            <div className="flex gap-1.5">
-              <input
-                type="email"
-                value={contactEmail}
-                onChange={(e) => setContactEmail(e.target.value)}
-                placeholder="Email (optional)"
-                className="flex-1 bg-[#181A1F] border border-[#2A2F3A] rounded px-3 py-1.5 text-xs text-white"
-              />
-              <button
-                type="submit"
-                disabled={contactSubmitting}
-                className="flex items-center gap-1 px-3 py-1.5 rounded bg-[#00D2FF] text-[#08090B] font-bold text-xs shrink-0 cursor-pointer"
-              >
-                <UserPlus className="w-3.5 h-3.5" />
-                <span>Add</span>
-              </button>
-            </div>
-          </form>
-
-          <div className="space-y-1.5">
+          <div className="space-y-2">
             {contacts.map((c) => (
               <div
                 key={c.id}
-                className="p-2.5 rounded bg-[#181A1F] border border-[#2A2F3A] flex items-center justify-between gap-2"
+                className="p-3 rounded-lg bg-[#101317] border border-white/[0.06] flex items-center justify-between gap-2"
               >
                 <div>
                   <div className="flex items-center gap-1.5 text-xs">
-                    <span className="font-semibold text-white">{c.name}</span>
-                    <span>·</span>
-                    <span className="text-[#00D2FF]">{c.relationship}</span>
+                    <span className="font-medium text-[#F5F7FA]">{c.name}</span>
+                    <span className="text-[#929AA5]">·</span>
+                    <span className="text-[#00D9F5]">{c.relationship}</span>
                   </div>
-                  <div className="text-[11px] font-mono text-[#8A909E]">
+                  <div className="text-[11px] font-mono text-[#929AA5]">
                     {c.phone} {c.email ? `· ${c.email}` : ''}
                   </div>
                 </div>
                 <button
                   type="button"
                   onClick={() => removeContact(c.id)}
-                  className="p-1 text-[#8A909E] hover:text-red-400 cursor-pointer"
+                  className="p-1.5 text-[#929AA5] hover:text-[#FF4148] cursor-pointer"
+                  aria-label="Remove contact"
                 >
                   <Trash2 className="w-3.5 h-3.5" />
                 </button>
               </div>
             ))}
           </div>
+
+          <ExpandableDetails label="Add trusted contact" collapseLabel="Hide contact form">
+            <form onSubmit={handleAddContact} className="grid grid-cols-1 sm:grid-cols-2 gap-2.5">
+              <input
+                type="text"
+                value={contactName}
+                onChange={(e) => setContactName(e.target.value)}
+                placeholder="Contact Full Name *"
+                required
+                className="bg-[#0A0C0F] border border-white/[0.08] rounded-lg px-3 py-2 text-xs text-[#F5F7FA]"
+              />
+              <input
+                type="text"
+                value={contactRelationship}
+                onChange={(e) => setContactRelationship(e.target.value)}
+                placeholder="Relationship (e.g., Family)"
+                className="bg-[#0A0C0F] border border-white/[0.08] rounded-lg px-3 py-2 text-xs text-[#F5F7FA]"
+              />
+              <input
+                type="tel"
+                value={contactPhone}
+                onChange={(e) => setContactPhone(e.target.value)}
+                placeholder="+91 98150 12345 *"
+                required
+                className="bg-[#0A0C0F] border border-white/[0.08] rounded-lg px-3 py-2 text-xs text-[#F5F7FA] font-mono"
+              />
+              <div className="flex gap-2">
+                <input
+                  type="email"
+                  value={contactEmail}
+                  onChange={(e) => setContactEmail(e.target.value)}
+                  placeholder="Email (optional)"
+                  className="flex-1 bg-[#0A0C0F] border border-white/[0.08] rounded-lg px-3 py-2 text-xs text-[#F5F7FA]"
+                />
+                <button
+                  type="submit"
+                  disabled={contactSubmitting}
+                  className="flex items-center gap-1 px-3.5 py-2 rounded-lg bg-[#00D9F5] text-[#050607] font-semibold text-xs shrink-0 cursor-pointer"
+                >
+                  <UserPlus className="w-3.5 h-3.5" />
+                  <span>Add</span>
+                </button>
+              </div>
+            </form>
+          </ExpandableDetails>
         </div>
 
         {/* Community Responders */}
-        <div className="lg:col-span-6 bg-[#111316] border border-[#22262E] rounded-lg p-4 space-y-3">
-          <div className="flex items-center justify-between pb-2.5 border-b border-[#22262E]">
+        <div className="bg-[#0A0C0F] border border-white/[0.06] rounded-xl p-5 space-y-4">
+          <div className="flex items-center justify-between">
             <div className="flex items-center gap-2">
-              <Radio className="w-3.5 h-3.5 text-emerald-400" />
-              <h3 className="font-display text-xs font-bold uppercase tracking-wider text-white">
-                Opt-In Community Responders ({responders.length})
+              <Radio className="w-4 h-4 text-emerald-400" />
+              <h3 className="font-display text-sm font-semibold text-[#F5F7FA]">
+                Community Responders ({responders.length})
               </h3>
             </div>
-            <span className="text-[10px] font-mono text-[#8A909E]">CHANDIGARH & MOHALI</span>
+            <span className="text-[11px] text-[#929AA5]">Chandigarh & Mohali</span>
           </div>
 
-          <form
-            onSubmit={handleSaveResponder}
-            className="p-3 rounded bg-[#181A1F] border border-[#2A2F3A] space-y-2.5"
-          >
-            <div className="flex items-center justify-between text-xs">
-              <span className="font-semibold text-white">
-                {myResponder ? 'Responder Availability' : 'Volunteer as Community Responder'}
-              </span>
-              <select
-                value={respStatus}
-                onChange={(e) => setRespStatus(e.target.value as ResponderStatus)}
-                className="bg-[#08090B] border border-[#2A2F3A] rounded px-2 py-1 text-[11px] text-[#00D2FF] font-mono"
-              >
-                <option value="available">Available</option>
-                <option value="busy">Busy</option>
-                <option value="offline">Offline</option>
-              </select>
-            </div>
-
-            <div className="grid grid-cols-1 sm:grid-cols-3 gap-2">
-              <input
-                type="text"
-                value={respRole}
-                onChange={(e) => setRespRole(e.target.value)}
-                placeholder="Qualification / Role"
-                className="bg-[#08090B] border border-[#2A2F3A] rounded px-2.5 py-1.5 text-xs text-white"
-              />
-              <input
-                type="text"
-                value={respSector}
-                onChange={(e) => setRespSector(e.target.value)}
-                placeholder="Sector / Area"
-                className="bg-[#08090B] border border-[#2A2F3A] rounded px-2.5 py-1.5 text-xs text-white"
-              />
-              <button
-                type="submit"
-                disabled={respSaving}
-                className="py-1.5 px-3 rounded bg-emerald-500 hover:bg-emerald-400 text-[#08090B] font-bold text-xs cursor-pointer"
-              >
-                {respSaving ? 'Saving...' : 'Save Status'}
-              </button>
-            </div>
-          </form>
-
-          <div className="space-y-1.5 max-h-52 overflow-y-auto pr-1">
+          <div className="space-y-2 max-h-56 overflow-y-auto pr-1">
             {responders.map((r) => {
               const dist = haversineDistanceKm(
                 userLocation.lat,
@@ -488,25 +448,25 @@ export const SosEmergencyView: React.FC<SosEmergencyViewProps> = ({
               return (
                 <div
                   key={r.id}
-                  className="p-2.5 rounded bg-[#181A1F] border border-[#2A2F3A] flex items-center justify-between gap-2 text-xs"
+                  className="p-3 rounded-lg bg-[#101317] border border-white/[0.06] flex items-center justify-between gap-2 text-xs"
                 >
                   <div>
                     <div className="flex items-center gap-1.5">
-                      <span className="font-semibold text-white">{r.fullName}</span>
-                      <span>·</span>
-                      <span className="text-[#8A909E]">{r.roleQualification}</span>
+                      <span className="font-medium text-[#F5F7FA]">{r.fullName}</span>
+                      <span className="text-[#929AA5]">·</span>
+                      <span className="text-[#929AA5]">{r.roleQualification}</span>
                     </div>
-                    <div className="text-[11px] text-[#8A909E] font-mono">
-                      {r.sectorArea} · {dist} km away · {r.acknowledgedCount} acks
+                    <div className="text-[11px] text-[#929AA5] font-mono mt-0.5">
+                      {r.sectorArea} · {dist} km away
                     </div>
                   </div>
                   <span
-                    className={`font-mono uppercase text-[10px] ${
+                    className={`font-mono uppercase text-[10px] px-2 py-0.5 rounded bg-[#15191E] border border-white/[0.06] ${
                       r.availabilityStatus === 'available'
                         ? 'text-emerald-400'
                         : r.availabilityStatus === 'busy'
                         ? 'text-[#F59E0B]'
-                        : 'text-[#8A909E]'
+                        : 'text-[#929AA5]'
                     }`}
                   >
                     {r.availabilityStatus}
@@ -515,6 +475,50 @@ export const SosEmergencyView: React.FC<SosEmergencyViewProps> = ({
               );
             })}
           </div>
+
+          <ExpandableDetails
+            label={myResponder ? 'Update my responder status' : 'Volunteer as responder'}
+            collapseLabel="Hide responder settings"
+          >
+            <form onSubmit={handleSaveResponder} className="space-y-2.5">
+              <div className="flex items-center justify-between text-xs">
+                <span className="text-[#929AA5]">Availability</span>
+                <select
+                  value={respStatus}
+                  onChange={(e) => setRespStatus(e.target.value as ResponderStatus)}
+                  className="bg-[#0A0C0F] border border-white/[0.08] rounded-lg px-2.5 py-1 text-xs text-[#00D9F5] font-mono"
+                >
+                  <option value="available">Available</option>
+                  <option value="busy">Busy</option>
+                  <option value="offline">Offline</option>
+                </select>
+              </div>
+
+              <div className="grid grid-cols-1 sm:grid-cols-3 gap-2">
+                <input
+                  type="text"
+                  value={respRole}
+                  onChange={(e) => setRespRole(e.target.value)}
+                  placeholder="Qualification / Role"
+                  className="bg-[#0A0C0F] border border-white/[0.08] rounded-lg px-3 py-2 text-xs text-[#F5F7FA]"
+                />
+                <input
+                  type="text"
+                  value={respSector}
+                  onChange={(e) => setRespSector(e.target.value)}
+                  placeholder="Sector / Area"
+                  className="bg-[#0A0C0F] border border-white/[0.08] rounded-lg px-3 py-2 text-xs text-[#F5F7FA]"
+                />
+                <button
+                  type="submit"
+                  disabled={respSaving}
+                  className="py-2 px-3 rounded-lg bg-emerald-500 hover:bg-emerald-400 text-[#050607] font-semibold text-xs cursor-pointer"
+                >
+                  {respSaving ? 'Saving...' : 'Save Status'}
+                </button>
+              </div>
+            </form>
+          </ExpandableDetails>
         </div>
       </div>
     </div>

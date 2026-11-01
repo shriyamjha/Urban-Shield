@@ -8,10 +8,7 @@ import {
   ShieldCheck,
   AlertTriangle,
   Crosshair,
-  SlidersHorizontal,
   X,
-  Camera,
-  Lightbulb,
 } from 'lucide-react';
 import {
   CityPoi,
@@ -26,6 +23,12 @@ import {
   GeocodingSuggestion,
   searchLocationsCached,
 } from '../services/gisClientService.ts';
+import {
+  AnimatedPanel,
+  DetailDrawer,
+  ExpandableDetails,
+  CompactMetric,
+} from './ui/ProgressivePrimitives.tsx';
 
 interface CityMapViewProps {
   userLocation: { lat: number; lng: number };
@@ -40,22 +43,25 @@ export const LAYER_DEFINITIONS: Array<{
   id: MapLayerCategory;
   label: string;
   colorHex: string;
+  primary?: boolean;
 }> = [
-  { id: 'hospital', label: 'Hospitals', colorHex: '#EF4444' },
-  { id: 'clinic', label: 'Clinics', colorHex: '#F87171' },
-  { id: 'pharmacy', label: 'Pharmacies', colorHex: '#10B981' },
-  { id: 'police', label: 'Police Stations', colorHex: '#3B82F6' },
-  { id: 'fuel', label: 'Petrol Pumps', colorHex: '#F59E0B' },
+  { id: 'hospital', label: 'Hospitals', colorHex: '#FF4148', primary: true },
+  { id: 'pharmacy', label: 'Pharmacies', colorHex: '#10B981', primary: true },
+  { id: 'police', label: 'Police', colorHex: '#3B82F6', primary: true },
+  { id: 'fuel', label: 'Petrol pumps', colorHex: '#F59E0B', primary: true },
+  { id: 'transport', label: 'Public transport', colorHex: '#00D9F5', primary: true },
   { id: 'restaurant', label: 'Restaurants', colorHex: '#F97316' },
-  { id: 'cafe', label: 'Cafes', colorHex: '#FB923C' },
   { id: 'shop', label: 'Shops', colorHex: '#A855F7' },
-  { id: 'transport', label: 'Public Transport', colorHex: '#00D2FF' },
-  { id: 'education', label: 'Educational', colorHex: '#6366F1' },
-  { id: 'cctv', label: 'CCTV Infrastructure', colorHex: '#14B8A6' },
+  { id: 'cctv', label: 'CCTV', colorHex: '#14B8A6' },
   { id: 'streetlight', label: 'Streetlights', colorHex: '#FACC15' },
-  { id: 'incident', label: 'Community Reports', colorHex: '#E11D48' },
-  { id: 'crime_hotspot', label: 'Historical Crime Hotspots', colorHex: '#DC2626' },
+  { id: 'education', label: 'Educational institutions', colorHex: '#6366F1' },
+  { id: 'clinic', label: 'Clinics', colorHex: '#F87171' },
+  { id: 'cafe', label: 'Cafes', colorHex: '#FB923C' },
+  { id: 'incident', label: 'Community reports', colorHex: '#E11D48' },
+  { id: 'crime_hotspot', label: 'Crime hotspots', colorHex: '#DC2626' },
 ];
+
+const SAVED_LAYERS_STORAGE_KEY = 'urbanshield_city_map_layers_v2';
 
 export const CityMapView: React.FC<CityMapViewProps> = ({
   userLocation,
@@ -71,28 +77,37 @@ export const CityMapView: React.FC<CityMapViewProps> = ({
   ]);
   const [mapZoom, setMapZoom] = useState<number>(13);
 
-  // Default to essential + infrastructure layers so map stays clean and scannable
-  const [activeLayers, setActiveLayers] = useState<Set<MapLayerCategory>>(
-    () =>
-      new Set([
-        'hospital',
-        'clinic',
-        'pharmacy',
-        'police',
-        'fuel',
-        'transport',
-        'cctv',
-        'streetlight',
-        'incident',
-      ])
-  );
+  // Default to only 3 core emergency categories so the map is calm and uncluttered.
+  // Remember user's selected layers in localStorage.
+  const [activeLayers, setActiveLayers] = useState<Set<MapLayerCategory>>(() => {
+    try {
+      const saved = localStorage.getItem(SAVED_LAYERS_STORAGE_KEY);
+      if (saved) {
+        const parsed = JSON.parse(saved) as MapLayerCategory[];
+        if (Array.isArray(parsed) && parsed.length > 0) {
+          return new Set(parsed);
+        }
+      }
+    } catch {
+      // Ignore storage error
+    }
+    return new Set<MapLayerCategory>(['hospital', 'police', 'pharmacy']);
+  });
 
-  const [selectedPoi, setSelectedPoi] = useState<CityPoi | null>(pois[0] || null);
+  // Show facility details ONLY when a marker is selected
+  const [selectedPoi, setSelectedPoi] = useState<CityPoi | null>(null);
   const [searchQuery, setSearchQuery] = useState('');
   const [suggestions, setSuggestions] = useState<GeocodingSuggestion[]>([]);
-  const [searching, setSearching] = useState(false);
 
-  // Debounced geocoding autocomplete (Part 8 & Part 12)
+  useEffect(() => {
+    try {
+      localStorage.setItem(SAVED_LAYERS_STORAGE_KEY, JSON.stringify(Array.from(activeLayers)));
+    } catch {
+      // Ignore storage error
+    }
+  }, [activeLayers]);
+
+  // Debounced geocoding autocomplete
   useEffect(() => {
     const clean = searchQuery.trim();
     if (clean.length < 2) {
@@ -101,11 +116,9 @@ export const CityMapView: React.FC<CityMapViewProps> = ({
     }
     const ctrl = new AbortController();
     const timer = setTimeout(async () => {
-      setSearching(true);
       const res = await searchLocationsCached(clean, ctrl.signal);
       setSuggestions(res);
-      setSearching(false);
-    }, 340);
+    }, 280);
 
     return () => {
       clearTimeout(timer);
@@ -123,18 +136,6 @@ export const CityMapView: React.FC<CityMapViewProps> = ({
       }
       return next;
     });
-  };
-
-  const setPresetLayers = (preset: 'all' | 'emergency' | 'infrastructure' | 'commercial') => {
-    if (preset === 'all') {
-      setActiveLayers(new Set(LAYER_DEFINITIONS.map((l) => l.id)));
-    } else if (preset === 'emergency') {
-      setActiveLayers(new Set(['hospital', 'clinic', 'pharmacy', 'police', 'incident']));
-    } else if (preset === 'infrastructure') {
-      setActiveLayers(new Set(['cctv', 'streetlight', 'transport', 'fuel', 'police']));
-    } else {
-      setActiveLayers(new Set(['restaurant', 'cafe', 'shop', 'fuel', 'pharmacy', 'education']));
-    }
   };
 
   const enrichedPois = useMemo(() => {
@@ -166,24 +167,6 @@ export const CityMapView: React.FC<CityMapViewProps> = ({
     });
   }, [enrichedPois, activeLayers, searchQuery]);
 
-  const cctvStats = useMemo(() => {
-    const cctvs = pois.filter((p) => p.category === 'cctv');
-    return {
-      verifiedCameras: cctvs.filter((p) => p.cctvClass === 'verified_camera').length,
-      documentedJunctions: cctvs.filter((p) => p.cctvClass === 'documented_junction').length,
-      surveillanceZones: cctvs.filter((p) => p.cctvClass === 'surveillance_zone').length,
-    };
-  }, [pois]);
-
-  const lightingStats = useMemo(() => {
-    const lights = pois.filter((p) => p.category === 'streetlight');
-    return {
-      verifiedIndividual: lights.filter((p) => p.streetlightClass === 'verified_streetlight').length,
-      lightingCorridors: lights.filter((p) => p.streetlightClass === 'lighting_corridor').length,
-      estimatedCoverage: lights.filter((p) => p.streetlightClass === 'estimated_coverage').length,
-    };
-  }, [pois]);
-
   const selectedPoiDistanceKm = selectedPoi
     ? haversineDistanceKm(
         userLocation.lat,
@@ -193,172 +176,202 @@ export const CityMapView: React.FC<CityMapViewProps> = ({
       ).toFixed(2)
     : null;
 
-  return (
-    <div className="space-y-4">
-      {/* Top Bar: Search + Quick Sector/Corridor Jumps */}
-      <section className="bg-[#111316] border border-[#22262E] rounded-lg p-3.5 flex flex-col lg:flex-row lg:items-center justify-between gap-3">
-        <div className="relative flex-1">
-          <Search className="w-3.5 h-3.5 text-[#8A909E] absolute left-3 top-1/2 -translate-y-1/2" />
-          <input
-            type="text"
-            value={searchQuery}
-            onChange={(e) => setSearchQuery(e.target.value)}
-            placeholder="Search Chandigarh & Mohali sectors, hospitals, police stations, universities..."
-            className="w-full bg-[#181A1F] border border-[#262A34] focus:border-[#00D2FF] rounded-md pl-9 pr-8 py-1.5 text-xs text-white placeholder:text-[#6B7280] focus:outline-none"
-          />
-          {searchQuery && (
-            <button
-              type="button"
-              onClick={() => {
-                setSearchQuery('');
-                setSuggestions([]);
-              }}
-              className="absolute right-2.5 top-1/2 -translate-y-1/2 text-[#8A909E] hover:text-white cursor-pointer"
-            >
-              <X className="w-3.5 h-3.5" />
-            </button>
-          )}
+  const primaryLayers = LAYER_DEFINITIONS.filter((l) => l.primary);
+  const extendedLayers = LAYER_DEFINITIONS.filter((l) => !l.primary);
 
-          {/* Autocomplete Dropdown */}
-          {suggestions.length > 0 && (
-            <div className="absolute left-0 right-0 top-full mt-1 z-50 bg-[#111316] border border-[#262A34] rounded-md shadow-2xl max-h-60 overflow-y-auto divide-y divide-[#1E222A]">
-              {suggestions.map((res) => (
+  return (
+    <div className="space-y-5">
+      {/* Header + Compact Search Bar + Minimal Category Selector */}
+      <div className="space-y-3.5">
+        <div className="flex flex-col md:flex-row md:items-center justify-between gap-3">
+          <div>
+            <h1 className="urbanshield-heading-enter font-display text-2xl font-semibold text-[#F5F7FA]">
+              City Intelligence
+            </h1>
+            <p className="urbanshield-subtext-enter text-xs text-[#929AA5]">
+              Select categories to inspect verified facilities across Chandigarh and Mohali
+            </p>
+          </div>
+
+          {/* Compact Search Bar + My GPS */}
+          <div className="urbanshield-subtext-enter flex items-center gap-2 w-full md:w-auto">
+            <div className="relative flex-1 md:w-80">
+              <Search className="w-3.5 h-3.5 text-[#929AA5] absolute left-3 top-1/2 -translate-y-1/2" />
+              <input
+                type="text"
+                value={searchQuery}
+                onChange={(e) => setSearchQuery(e.target.value)}
+                placeholder="Search sectors, hospitals, landmarks..."
+                className="w-full bg-[#101317] border border-white/[0.08] focus:border-[#00D9F5] rounded-xl pl-9 pr-8 py-2 text-xs text-[#F5F7FA] placeholder:text-[#929AA5]/60 focus:outline-none transition-colors"
+              />
+              {searchQuery && (
                 <button
-                  key={res.id}
                   type="button"
                   onClick={() => {
-                    setMapCenter([res.longitude, res.latitude]);
-                    setMapZoom(15);
-                    setSelectedPoi({
-                      id: `search-${res.id}`,
-                      name: res.name.split(',')[0],
-                      category: 'shop',
-                      latitude: res.latitude,
-                      longitude: res.longitude,
-                      address: res.name,
-                      source: 'OpenStreetMap / Overpass API',
-                      verified: true,
-                    });
+                    setSearchQuery('');
                     setSuggestions([]);
                   }}
-                  className="w-full px-3 py-2 text-left hover:bg-[#181A1F] flex items-center justify-between gap-2 text-xs cursor-pointer"
+                  className="absolute right-2.5 top-1/2 -translate-y-1/2 text-[#929AA5] hover:text-[#F5F7FA] cursor-pointer"
                 >
-                  <span className="text-white truncate">{res.name}</span>
-                  <span className="text-[10px] font-mono text-[#00D2FF] shrink-0">
-                    {res.latitude.toFixed(3)}, {res.longitude.toFixed(3)}
-                  </span>
+                  <X className="w-3.5 h-3.5" />
                 </button>
-              ))}
-            </div>
-          )}
-        </div>
+              )}
 
-        <div className="flex flex-wrap items-center gap-1.5 text-xs">
-          {[
-            { label: 'Sector 17 Chd', lng: 76.7834, lat: 30.7411 },
-            { label: 'Sector 22 Chd', lng: 76.7741, lat: 30.7339 },
-            { label: 'Phase 8 Mohali', lng: 76.7318, lat: 30.6952 },
-            { label: 'CGC Landran', lng: 76.6634, lat: 30.6869 },
-            { label: 'Airport', lng: 76.7885, lat: 30.6735 },
-          ].map((loc) => (
+              {/* Autocomplete Dropdown */}
+              {suggestions.length > 0 && (
+                <div className="absolute left-0 right-0 top-full mt-1.5 z-50 bg-[#101317] border border-white/[0.1] rounded-xl shadow-2xl max-h-60 overflow-y-auto divide-y divide-white/[0.05]">
+                  {suggestions.map((res) => (
+                    <button
+                      key={res.id}
+                      type="button"
+                      onClick={() => {
+                        setMapCenter([res.longitude, res.latitude]);
+                        setMapZoom(15);
+                        setSelectedPoi({
+                          id: `search-${res.id}`,
+                          name: res.name.split(',')[0],
+                          category: 'shop',
+                          latitude: res.latitude,
+                          longitude: res.longitude,
+                          address: res.name,
+                          source: 'OpenStreetMap / Overpass API',
+                          verified: true,
+                        });
+                        setSuggestions([]);
+                      }}
+                      className="w-full px-3.5 py-2.5 text-left hover:bg-[#15191E] flex items-center justify-between gap-2 text-xs cursor-pointer"
+                    >
+                      <span className="text-[#F5F7FA] truncate">{res.name}</span>
+                      <span className="text-[10px] font-mono text-[#00D9F5] shrink-0">
+                        {res.latitude.toFixed(3)}, {res.longitude.toFixed(3)}
+                      </span>
+                    </button>
+                  ))}
+                </div>
+              )}
+            </div>
+
             <button
-              key={loc.label}
               type="button"
               onClick={() => {
-                setMapCenter([loc.lng, loc.lat]);
+                onRequestBrowserLocation();
+                setMapCenter([userLocation.lng, userLocation.lat]);
                 setMapZoom(14);
               }}
-              className="px-2.5 py-1.5 rounded-md bg-[#181A1F] hover:bg-[#22262E] border border-[#262A34] text-[#D1D5DB] hover:text-white transition-colors whitespace-nowrap cursor-pointer"
+              className="urbanshield-interactive-btn flex items-center gap-1.5 px-3 py-2 rounded-xl bg-[#101317] hover:bg-[#15191E] border border-white/[0.08] text-xs font-medium text-[#F5F7FA] whitespace-nowrap cursor-pointer"
             >
-              {loc.label}
-            </button>
-          ))}
-          <button
-            type="button"
-            onClick={() => {
-              onRequestBrowserLocation();
-              setMapCenter([userLocation.lng, userLocation.lat]);
-              setMapZoom(14);
-            }}
-            className="flex items-center gap-1.5 px-2.5 py-1.5 rounded-md bg-[#181A1F] hover:bg-[#22262E] border border-[#00D2FF]/40 text-[#00D2FF] whitespace-nowrap cursor-pointer"
-          >
-            <Crosshair className="w-3.5 h-3.5" />
-            <span>My GPS</span>
-          </button>
-        </div>
-      </section>
-
-      {/* 14 Independent Toggleable GIS Map Layers */}
-      <section className="bg-[#111316] border border-[#22262E] rounded-lg p-3.5 space-y-2.5">
-        <div className="flex flex-wrap items-center justify-between gap-2 pb-2 border-b border-[#1E222A]">
-          <div className="flex items-center gap-2 text-xs font-medium text-white">
-            <SlidersHorizontal className="w-3.5 h-3.5 text-[#00D2FF]" />
-            <span>City Intelligence Layers ({activeLayers.size}/14 Active)</span>
-          </div>
-
-          <div className="flex flex-wrap items-center gap-1.5 text-[11px]">
-            <button
-              type="button"
-              onClick={() => setPresetLayers('emergency')}
-              className="px-2 py-0.5 rounded bg-[#181A1F] hover:bg-[#22262E] border border-[#262A34] text-[#D1D5DB] cursor-pointer"
-            >
-              Emergency Only
-            </button>
-            <button
-              type="button"
-              onClick={() => setPresetLayers('infrastructure')}
-              className="px-2 py-0.5 rounded bg-[#181A1F] hover:bg-[#22262E] border border-[#262A34] text-[#D1D5DB] cursor-pointer"
-            >
-              CCTV & Lighting
-            </button>
-            <button
-              type="button"
-              onClick={() => setPresetLayers('commercial')}
-              className="px-2 py-0.5 rounded bg-[#181A1F] hover:bg-[#22262E] border border-[#262A34] text-[#D1D5DB] cursor-pointer"
-            >
-              Commercial Activity
-            </button>
-            <button
-              type="button"
-              onClick={() => setPresetLayers('all')}
-              className="px-2 py-0.5 rounded bg-[#181A1F] hover:bg-[#22262E] border border-[#262A34] text-[#00D2FF] cursor-pointer"
-            >
-              Enable All 14
+              <Crosshair className="w-3.5 h-3.5 text-[#00D9F5]" />
+              <span>My GPS</span>
             </button>
           </div>
         </div>
 
-        <div className="flex flex-wrap gap-1.5">
-          {LAYER_DEFINITIONS.map((layer) => {
-            const active = activeLayers.has(layer.id);
-            const code = CATEGORY_STYLE_MAP[layer.id]?.shortCode || '•';
-            return (
-              <button
-                key={layer.id}
-                type="button"
-                onClick={() => toggleLayer(layer.id)}
-                className={`flex items-center gap-1.5 px-2.5 py-1 rounded text-[11px] font-medium border transition-colors whitespace-nowrap shrink-0 cursor-pointer ${
-                  active
-                    ? 'bg-[#181A1F] border-[#00D2FF]/50 text-white'
-                    : 'bg-[#08090B] border-[#1E222A] text-[#6B7280] hover:text-[#9CA3AF]'
-                }`}
-              >
-                <span
-                  className="w-3.5 h-3.5 rounded-full text-[8px] font-mono font-bold text-[#08090B] flex items-center justify-center"
-                  style={{ backgroundColor: layer.colorHex }}
+        {/* Minimal Category Selector + Expandable Map Layers */}
+        <AnimatedPanel stagger={1} className="space-y-2.5">
+          <div className="flex flex-wrap items-center gap-2">
+            {primaryLayers.map((layer) => {
+              const active = activeLayers.has(layer.id);
+              return (
+                <button
+                  key={layer.id}
+                  type="button"
+                  onClick={() => toggleLayer(layer.id)}
+                  className={`urbanshield-interactive-btn inline-flex items-center gap-2 px-3 py-1.5 rounded-full text-xs font-medium border cursor-pointer ${
+                    active
+                      ? 'bg-[#15191E] border-[#00D9F5]/50 text-[#F5F7FA]'
+                      : 'bg-[#0A0C0F] border-white/[0.06] text-[#929AA5] hover:text-[#F5F7FA]'
+                  }`}
                 >
-                  {code}
-                </span>
-                <span>{layer.label}</span>
-              </button>
-            );
-          })}
-        </div>
-      </section>
+                  <span
+                    className="w-2 h-2 rounded-full"
+                    style={{ backgroundColor: layer.colorHex }}
+                  />
+                  <span>{layer.label}</span>
+                </button>
+              );
+            })}
 
-      {/* Main Split: Leaflet Map + Selected Location Inspector & Directory */}
-      <section className="grid grid-cols-1 lg:grid-cols-12 gap-4 items-stretch">
-        <div className="lg:col-span-8">
+            <ExpandableDetails
+              label="Expand map layers"
+              openLabel="Fewer layers"
+              badge={`${activeLayers.size} active`}
+              variant="pill"
+              className="inline-block"
+              contentClassName="pt-2.5"
+            >
+              <div className="p-3.5 rounded-2xl bg-[#0A0C0F] border border-white/[0.06] space-y-3">
+                <div className="flex flex-wrap gap-1.5">
+                  {extendedLayers.map((layer) => {
+                    const active = activeLayers.has(layer.id);
+                    const code = CATEGORY_STYLE_MAP[layer.id]?.shortCode || '•';
+                    return (
+                      <button
+                        key={layer.id}
+                        type="button"
+                        onClick={() => toggleLayer(layer.id)}
+                        className={`urbanshield-interactive-btn flex items-center gap-1.5 px-3 py-1.5 rounded-full text-xs font-medium border cursor-pointer ${
+                          active
+                            ? 'bg-[#15191E] border-[#00D9F5]/50 text-[#F5F7FA]'
+                            : 'bg-[#101317] border-white/[0.06] text-[#929AA5] hover:text-[#F5F7FA]'
+                        }`}
+                      >
+                        <span
+                          className="w-3.5 h-3.5 rounded-full text-[8px] font-mono font-bold text-[#050607] flex items-center justify-center"
+                          style={{ backgroundColor: layer.colorHex }}
+                        >
+                          {code}
+                        </span>
+                        <span>{layer.label}</span>
+                      </button>
+                    );
+                  })}
+                </div>
+
+                <div className="flex flex-wrap items-center gap-3 pt-2 border-t border-white/[0.05] text-[11px] text-[#929AA5]">
+                  <button
+                    type="button"
+                    onClick={() =>
+                      setActiveLayers(new Set(['hospital', 'police', 'pharmacy']))
+                    }
+                    className="hover:text-[#F5F7FA] cursor-pointer"
+                  >
+                    Reset to essential
+                  </button>
+                  <span>·</span>
+                  <button
+                    type="button"
+                    onClick={() =>
+                      setActiveLayers(
+                        new Set(['cctv', 'streetlight', 'transport', 'fuel', 'police'])
+                      )
+                    }
+                    className="hover:text-[#F5F7FA] cursor-pointer"
+                  >
+                    CCTV &amp; lighting
+                  </button>
+                  <span>·</span>
+                  <button
+                    type="button"
+                    onClick={() =>
+                      setActiveLayers(new Set(LAYER_DEFINITIONS.map((l) => l.id)))
+                    }
+                    className="text-[#00D9F5] hover:underline cursor-pointer"
+                  >
+                    Show all 14 layers
+                  </button>
+                </div>
+              </div>
+            </ExpandableDetails>
+          </div>
+        </AnimatedPanel>
+      </div>
+
+      {/* Main Viewport: Prominent Map + Contextual Selected Marker Drawer (shown ONLY when a marker is selected) */}
+      <div className="grid grid-cols-1 lg:grid-cols-12 gap-5 items-start">
+        <AnimatedPanel
+          stagger={2}
+          className={selectedPoi ? 'lg:col-span-8' : 'lg:col-span-12'}
+        >
           <InteractiveCityMap
             center={mapCenter}
             zoom={mapZoom}
@@ -372,202 +385,153 @@ export const CityMapView: React.FC<CityMapViewProps> = ({
             activeLayers={activeLayers}
             selectedPoi={selectedPoi}
             onSelectPoi={(poi) => setSelectedPoi(poi)}
-            heightClass="h-[540px]"
+            heightClass="h-[540px] lg:h-[600px]"
           />
-        </div>
+        </AnimatedPanel>
 
-        {/* Right Column: Selected Feature Details + Directory */}
-        <div className="lg:col-span-4 flex flex-col gap-3 h-[540px]">
-          <div className="bg-[#111316] border border-[#22262E] rounded-lg p-4 shrink-0">
-            {selectedPoi ? (
-              <div className="space-y-2.5">
-                <div className="flex items-center justify-between text-[11px] font-mono">
-                  <span className="text-[#00D2FF] uppercase">{selectedPoi.category}</span>
-                  <span className="text-[#8A909E] tabular-nums">
-                    {selectedPoiDistanceKm} km away
-                  </span>
-                </div>
-
-                <h3 className="font-display text-sm font-semibold text-white leading-snug">
-                  {selectedPoi.name}
-                </h3>
-
-                <div className="space-y-1.5 pt-2 border-t border-[#1E222A] text-xs text-[#D1D5DB]">
+        {/* Contextual Facility Detail Panel — Rendered ONLY when a marker is selected */}
+        {selectedPoi && (
+          <div className="lg:col-span-4">
+            <DetailDrawer
+              open={Boolean(selectedPoi)}
+              onClose={() => setSelectedPoi(null)}
+              eyebrow={selectedPoi.category}
+              title={selectedPoi.name}
+              subtitle={
+                selectedPoiDistanceKm ? `${selectedPoiDistanceKm} km from your location` : undefined
+              }
+            >
+              <div className="space-y-4 text-xs">
+                <div className="space-y-2 text-[#929AA5]">
                   <div className="flex items-start gap-2">
-                    <MapPin className="w-3.5 h-3.5 text-[#8A909E] shrink-0 mt-0.5" />
-                    <span>
-                      {selectedPoi.address || 'Street address not documented in OpenStreetMap'}
+                    <MapPin className="w-3.5 h-3.5 text-[#929AA5] shrink-0 mt-0.5" />
+                    <span className="text-[#F5F7FA]">
+                      {selectedPoi.address || 'Chandigarh / Mohali'}
                     </span>
                   </div>
 
-                  <div className="flex items-center gap-2">
-                    <Phone className="w-3.5 h-3.5 text-[#8A909E] shrink-0" />
-                    <span className="font-mono text-[11px]">
-                      {selectedPoi.phone || 'Phone not documented in OSM'}
-                    </span>
-                  </div>
-
-                  <div className="flex items-center gap-2">
-                    <Clock className="w-3.5 h-3.5 text-[#8A909E] shrink-0" />
-                    <span className="text-[11px]">
-                      {selectedPoi.openingHours
-                        ? `Documented Hours: ${selectedPoi.openingHours}`
-                        : 'Opening hours not documented in OSM'}
-                    </span>
-                  </div>
-
-                  {selectedPoi.coverageNote && (
-                    <div className="p-2 rounded bg-[#181A1F] border border-[#262A34] text-[11px] text-[#F59E0B]">
-                      {selectedPoi.coverageNote}
+                  {selectedPoi.openingHours && (
+                    <div className="flex items-center gap-2">
+                      <Clock className="w-3.5 h-3.5 text-[#929AA5] shrink-0" />
+                      <span>{selectedPoi.openingHours}</span>
                     </div>
                   )}
 
-                  <div className="flex items-center gap-1.5 text-[11px] text-[#8A909E]">
-                    {selectedPoi.verified ? (
-                      <ShieldCheck className="w-3.5 h-3.5 text-emerald-400 shrink-0" />
-                    ) : (
-                      <AlertTriangle className="w-3.5 h-3.5 text-amber-400 shrink-0" />
-                    )}
-                    <span>Source: {selectedPoi.source}</span>
-                  </div>
+                  {selectedPoi.phone && (
+                    <div className="flex items-center gap-2">
+                      <Phone className="w-3.5 h-3.5 text-[#929AA5] shrink-0" />
+                      <span className="font-mono">{selectedPoi.phone}</span>
+                    </div>
+                  )}
                 </div>
 
                 <button
                   type="button"
                   onClick={() => onNavigateToPoi(selectedPoi)}
-                  className="w-full mt-1 py-2 px-3 rounded-md bg-[#00D2FF] hover:bg-[#38BDF8] text-[#08090B] font-semibold text-xs flex items-center justify-center gap-1.5 cursor-pointer"
+                  className="urbanshield-interactive-btn w-full py-2.5 px-4 rounded-xl bg-[#00D9F5] hover:bg-[#00D9F5]/90 text-[#050607] font-semibold text-xs flex items-center justify-center gap-2 cursor-pointer"
                 >
                   <Navigation className="w-3.5 h-3.5" />
-                  <span>Calculate Route Here</span>
+                  <span>Calculate route here</span>
                 </button>
+
+                {/* Progressive Disclosure: Source information, verification status, coordinates & extended metadata */}
+                <div className="pt-2 border-t border-white/[0.06]">
+                  <ExpandableDetails
+                    label="More information"
+                    openLabel="Less information"
+                    variant="minimal"
+                    contentClassName="pt-3 space-y-2 text-[11px] text-[#929AA5]"
+                  >
+                    <div className="flex items-center gap-1.5">
+                      {selectedPoi.verified ? (
+                        <ShieldCheck className="w-3.5 h-3.5 text-emerald-400 shrink-0" />
+                      ) : (
+                        <AlertTriangle className="w-3.5 h-3.5 text-[#F59E0B] shrink-0" />
+                      )}
+                      <span>
+                        {selectedPoi.verified ? 'Verified record' : 'Unverified record'} ·{' '}
+                        {selectedPoi.source}
+                      </span>
+                    </div>
+
+                    <div className="font-mono text-[#929AA5]">
+                      Coordinates: {selectedPoi.latitude.toFixed(5)}° N,{' '}
+                      {selectedPoi.longitude.toFixed(5)}° E
+                    </div>
+
+                    {selectedPoi.coverageNote && (
+                      <div className="p-2.5 rounded-lg bg-[#15191E] text-[#F59E0B] leading-relaxed">
+                        {selectedPoi.coverageNote}
+                      </div>
+                    )}
+                  </ExpandableDetails>
+                </div>
               </div>
-            ) : (
-              <div className="text-xs text-[#8A909E] py-6 text-center">
-                Select any marker on the map to inspect verified metadata.
-              </div>
-            )}
+            </DetailDrawer>
+          </div>
+        )}
+      </div>
+
+      {/* Progressive Disclosure: Directory & Infrastructure Methodology hidden until requested */}
+      <div className="pt-2 border-t border-white/[0.06] flex flex-wrap items-center gap-4">
+        <ExpandableDetails
+          label="Explore data"
+          openLabel="Hide directory"
+          badge={`${filteredListPois.length} locations`}
+          variant="minimal"
+          className="w-full"
+          contentClassName="pt-4 space-y-5"
+        >
+          <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-2.5 max-h-80 overflow-y-auto pr-1">
+            {filteredListPois.map((poi) => (
+              <button
+                key={poi.id}
+                type="button"
+                onClick={() => {
+                  setSelectedPoi(poi);
+                  setMapCenter([poi.longitude, poi.latitude]);
+                }}
+                className={`p-3 rounded-xl border text-left transition-colors cursor-pointer ${
+                  selectedPoi?.id === poi.id
+                    ? 'bg-[#15191E] border-[#00D9F5]/50'
+                    : 'bg-[#0A0C0F] hover:bg-[#101317] border-white/[0.06]'
+                }`}
+              >
+                <div className="flex items-center justify-between gap-2 text-xs">
+                  <span className="font-medium text-[#F5F7FA] truncate">{poi.name}</span>
+                  <span className="font-mono text-[11px] text-[#00D9F5] tabular-nums shrink-0">
+                    {poi.distanceKm} km
+                  </span>
+                </div>
+                <div className="text-[11px] text-[#929AA5] truncate mt-0.5 capitalize">
+                  {poi.category} · {poi.address || 'Chandigarh / Mohali'}
+                </div>
+              </button>
+            ))}
           </div>
 
-          {/* Scrollable Directory */}
-          <div className="bg-[#111316] border border-[#22262E] rounded-lg p-3.5 flex-1 flex flex-col overflow-hidden">
-            <div className="flex items-center justify-between pb-2 mb-2 border-b border-[#1E222A] text-xs">
-              <span className="font-semibold text-white">
-                Active Layer Directory ({filteredListPois.length})
-              </span>
-              <span className="text-[11px] font-mono text-[#8A909E]">Nearest first</span>
+          <div className="p-4 rounded-2xl bg-[#0A0C0F] border border-white/[0.06] space-y-2 text-xs text-[#929AA5]">
+            <div className="flex flex-wrap items-center gap-x-6 gap-y-2">
+              <CompactMetric
+                label="ICCC & OSM CCTV Nodes"
+                value={pois.filter((p) => p.category === 'cctv').length}
+                accent="cyan"
+              />
+              <CompactMetric
+                label="Mapped Lighting Corridors"
+                value={pois.filter((p) => p.category === 'streetlight').length}
+                accent="amber"
+              />
             </div>
-
-            <div className="flex-1 overflow-y-auto space-y-1.5 pr-1">
-              {filteredListPois.map((poi) => (
-                <button
-                  key={poi.id}
-                  type="button"
-                  onClick={() => {
-                    setSelectedPoi(poi);
-                    setMapCenter([poi.longitude, poi.latitude]);
-                  }}
-                  className={`w-full p-2.5 rounded-md border text-left transition-colors cursor-pointer ${
-                    selectedPoi?.id === poi.id
-                      ? 'bg-[#181A1F] border-[#00D2FF]/50'
-                      : 'bg-[#08090B] hover:bg-[#181A1F] border-[#1E222A]'
-                  }`}
-                >
-                  <div className="flex items-center justify-between gap-2">
-                    <span className="text-xs font-medium text-white truncate">{poi.name}</span>
-                    <span className="text-[11px] font-mono tabular-nums text-[#00D2FF] shrink-0">
-                      {poi.distanceKm} km
-                    </span>
-                  </div>
-                  <div className="mt-0.5 text-[10px] font-mono text-[#8A909E] truncate">
-                    {poi.category.toUpperCase()} · {poi.address || 'Chandigarh / Mohali'}
-                  </div>
-                </button>
-              ))}
-            </div>
+            <p className="text-[11px] leading-relaxed">
+              Chandigarh Smart City ICCC operates intersection surveillance across primary V2/V3
+              arterial roads. OpenStreetMap does not map every individual camera or streetlamp pole;
+              unmapped internal sector lanes indicate partial public records rather than confirmed
+              absence of lighting or cameras.
+            </p>
           </div>
-        </div>
-      </section>
-
-      {/* PART 7 — CCTV AND STREETLIGHT INFRASTRUCTURE INTELLIGENCE AUDIT */}
-      <section className="grid grid-cols-1 md:grid-cols-2 gap-4">
-        <div className="bg-[#111316] border border-[#22262E] rounded-lg p-4 space-y-2.5">
-          <div className="flex items-center justify-between border-b border-[#1E222A] pb-2">
-            <div className="flex items-center gap-2 text-xs font-semibold text-white">
-              <Camera className="w-3.5 h-3.5 text-[#14B8A6]" />
-              <span>CCTV Infrastructure Classification (Chandigarh & Mohali)</span>
-            </div>
-            <span className="text-[10px] font-mono text-[#8A909E]">ICCC + OSM</span>
-          </div>
-          <div className="grid grid-cols-4 gap-2 text-center font-mono">
-            <div className="p-2 rounded bg-[#08090B] border border-[#1E222A]">
-              <div className="text-sm font-bold text-white tabular-nums">
-                {cctvStats.verifiedCameras}
-              </div>
-              <div className="text-[10px] text-[#8A909E]">Verified Cameras</div>
-            </div>
-            <div className="p-2 rounded bg-[#08090B] border border-[#1E222A]">
-              <div className="text-sm font-bold text-[#14B8A6] tabular-nums">
-                {cctvStats.documentedJunctions}
-              </div>
-              <div className="text-[10px] text-[#8A909E]">ICCC Junctions</div>
-            </div>
-            <div className="p-2 rounded bg-[#08090B] border border-[#1E222A]">
-              <div className="text-sm font-bold text-[#00D2FF] tabular-nums">
-                {cctvStats.surveillanceZones}
-              </div>
-              <div className="text-[10px] text-[#8A909E]">Surveillance Zones</div>
-            </div>
-            <div className="p-2 rounded bg-[#08090B] border border-[#1E222A]">
-              <div className="text-xs font-semibold text-[#F59E0B] pt-0.5">Partial OSM</div>
-              <div className="text-[10px] text-[#8A909E]">Sub-Sector Lanes</div>
-            </div>
-          </div>
-          <p className="text-[11px] text-[#8A909E] leading-relaxed">
-            Chandigarh Smart City ICCC operates extensive intersection surveillance across V2/V3
-            arterials. Absent OpenStreetMap camera nodes in internal sectors indicate unmapped
-            public records, not confirmed absence of cameras.
-          </p>
-        </div>
-
-        <div className="bg-[#111316] border border-[#22262E] rounded-lg p-4 space-y-2.5">
-          <div className="flex items-center justify-between border-b border-[#1E222A] pb-2">
-            <div className="flex items-center gap-2 text-xs font-semibold text-white">
-              <Lightbulb className="w-3.5 h-3.5 text-[#FACC15]" />
-              <span>Streetlight Coverage Classification</span>
-            </div>
-            <span className="text-[10px] font-mono text-[#8A909E]">MC Chd + GMADA</span>
-          </div>
-          <div className="grid grid-cols-4 gap-2 text-center font-mono">
-            <div className="p-2 rounded bg-[#08090B] border border-[#1E222A]">
-              <div className="text-sm font-bold text-white tabular-nums">
-                {lightingStats.verifiedIndividual}
-              </div>
-              <div className="text-[10px] text-[#8A909E]">Verified Poles</div>
-            </div>
-            <div className="p-2 rounded bg-[#08090B] border border-[#1E222A]">
-              <div className="text-sm font-bold text-[#FACC15] tabular-nums">
-                {lightingStats.lightingCorridors}
-              </div>
-              <div className="text-[10px] text-[#8A909E]">Lit Corridors</div>
-            </div>
-            <div className="p-2 rounded bg-[#08090B] border border-[#1E222A]">
-              <div className="text-sm font-bold text-[#00D2FF] tabular-nums">
-                {lightingStats.estimatedCoverage}
-              </div>
-              <div className="text-[10px] text-[#8A909E]">Est. Highway</div>
-            </div>
-            <div className="p-2 rounded bg-[#08090B] border border-[#1E222A]">
-              <div className="text-xs font-semibold text-[#8A909E] pt-0.5">Unmapped</div>
-              <div className="text-[10px] text-[#8A909E]">V5/V6 Internal</div>
-            </div>
-          </div>
-          <p className="text-[11px] text-[#8A909E] leading-relaxed">
-            OpenStreetMap does not record every individual streetlamp pole in Chandigarh and Mohali.
-            UrbanShield evaluates documented arterial lighting corridors alongside verified OSM lamp
-            nodes and never assigns zero lighting scores due to unmapped poles.
-          </p>
-        </div>
-      </section>
+        </ExpandableDetails>
+      </div>
     </div>
   );
 };

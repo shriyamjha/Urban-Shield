@@ -4,12 +4,8 @@ import {
   Navigation,
   Siren,
   CloudSun,
-  AlertTriangle,
-  Building2,
-  ArrowRight,
   Crosshair,
-  Flame,
-  ShieldCheck,
+  ArrowUpRight,
 } from 'lucide-react';
 import {
   CityPoi,
@@ -23,6 +19,11 @@ import { InteractiveCityMap } from './InteractiveCityMap.tsx';
 import { haversineDistanceKm } from '../data/chandigarhMohaliBaseline.ts';
 import { HISTORICAL_CRIME_DATABASE } from '../data/historicalCrimeData.ts';
 import { useAuth } from '../context/AuthContext.tsx';
+import {
+  AnimatedPanel,
+  ExpandableDetails,
+  CompactMetric,
+} from './ui/ProgressivePrimitives.tsx';
 
 interface OverviewDashboardViewProps {
   userLocation: { lat: number; lng: number };
@@ -49,9 +50,15 @@ export const OverviewDashboardView: React.FC<OverviewDashboardViewProps> = ({
 }) => {
   const { user, contacts } = useAuth();
 
-  const nearestEssentials = useMemo(() => {
+  const firstName = useMemo(() => {
+    const raw = user?.fullName?.trim();
+    if (!raw) return 'there';
+    return raw.split(' ')[0];
+  }, [user?.fullName]);
+
+  const nearestHelpPoints = useMemo(() => {
     return pois
-      .filter((p) => ['hospital', 'police', 'pharmacy', 'fuel', 'transport'].includes(p.category))
+      .filter((p) => ['hospital', 'police', 'pharmacy'].includes(p.category))
       .map((p) => ({
         ...p,
         distanceKm: Number(
@@ -64,180 +71,151 @@ export const OverviewDashboardView: React.FC<OverviewDashboardViewProps> = ({
         ),
       }))
       .sort((a, b) => (a.distanceKm ?? 99) - (b.distanceKm ?? 99))
-      .slice(0, 6);
+      .slice(0, 4);
   }, [pois, userLocation]);
 
-  const activeMapLayers = useMemo(
-    () =>
-      new Set<MapLayerCategory>([
-        'hospital',
-        'pharmacy',
-        'police',
-        'transport',
-        'cctv',
-        'streetlight',
-        'incident',
-      ]),
+  // Keep default map clean: only essential help facilities
+  const defaultMapLayers = useMemo(
+    () => new Set<MapLayerCategory>(['hospital', 'police', 'pharmacy']),
     []
   );
 
   const chdWeather = weather[0];
 
+  const infraBreakdown = useMemo(() => {
+    return {
+      hospitals: pois.filter((p) => p.category === 'hospital' || p.category === 'clinic').length,
+      police: pois.filter((p) => p.category === 'police').length,
+      pharmacies: pois.filter((p) => p.category === 'pharmacy').length,
+      cctv: pois.filter((p) => p.category === 'cctv').length,
+      lighting: pois.filter((p) => p.category === 'streetlight').length,
+      verifiedReports: reports.filter(
+        (r) =>
+          r.verificationStatus === 'community_confirmed' ||
+          r.verificationStatus === 'moderator_verified'
+      ).length,
+    };
+  }, [pois, reports]);
+
   return (
-    <div className="space-y-4">
-      {/* Compact Situational Telemetry Strip */}
-      <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-3">
-        {/* 1. Active GPS Anchor */}
-        <div className="bg-[#111316] border border-[#22262E] rounded-lg p-3.5 flex flex-col justify-between">
-          <div className="flex items-center justify-between text-[11px] font-mono text-[#8A909E]">
-            <span>GPS TELEMETRY</span>
+    <div className="space-y-6">
+      {/* 1. Simple Welcome Heading + 2. Current Location & Location Status + 5. Clear Emergency SOS Control */}
+      <div className="flex flex-col md:flex-row md:items-end justify-between gap-4 pb-2 border-b border-white/[0.06]">
+        <div className="space-y-1.5">
+          <h1 className="urbanshield-heading-enter font-display text-2xl sm:text-3xl font-semibold tracking-tight text-[#F5F7FA]">
+            Welcome, {firstName}
+          </h1>
+          <div className="urbanshield-subtext-enter flex flex-wrap items-center gap-x-3 gap-y-1 text-xs text-[#929AA5]">
+            <span className="inline-flex items-center gap-1.5 text-[#F5F7FA]">
+              <span className="w-1.5 h-1.5 rounded-full bg-emerald-400" />
+              <span>{user?.defaultCity || 'Chandigarh'} · Active location</span>
+            </span>
+            <span>·</span>
             <button
               type="button"
               onClick={onRequestBrowserLocation}
-              className="text-[#00D2FF] hover:underline flex items-center gap-1 cursor-pointer"
+              className="urbanshield-interactive-btn inline-flex items-center gap-1 text-[#00D9F5] hover:underline cursor-pointer"
             >
               <Crosshair className="w-3 h-3" />
-              <span>SYNC</span>
+              <span>Update GPS</span>
             </button>
-          </div>
-          <div className="mt-1.5 font-mono text-sm font-bold text-white tabular-nums">
-            {userLocation.lat.toFixed(4)}° N, {userLocation.lng.toFixed(4)}° E
-          </div>
-          <div className="mt-1 text-[11px] text-[#8A909E] flex items-center justify-between">
-            <span>Corridor: {user?.defaultCity || 'Chandigarh & Mohali'}</span>
-            <span className="font-mono text-emerald-400">{pois.length} Verified Nodes</span>
           </div>
         </div>
 
-        {/* 2. Smart Route Intelligence */}
-        <button
-          type="button"
-          onClick={() => onNavigateSection('routes')}
-          className="bg-[#111316] hover:bg-[#181A1F] border border-[#22262E] rounded-lg p-3.5 flex flex-col justify-between text-left transition-colors cursor-pointer"
-        >
-          <div className="flex items-center justify-between text-[11px] font-mono text-[#8A909E]">
-            <span>SMART ROUTE ENGINE</span>
-            <Navigation className="w-3.5 h-3.5 text-[#F59E0B]" />
-          </div>
-          <div className="mt-1.5 font-display text-sm font-bold text-white">
-            Recommended · Fastest · Activity
-          </div>
-          <div className="mt-1 text-[11px] text-[#F59E0B] flex items-center gap-1 font-mono">
-            <span>Driving · Walking · Cycling OSRM</span>
-            <ArrowRight className="w-3 h-3" />
-          </div>
-        </button>
+        {/* 5. Clear Emergency SOS Control + Quick Route Action */}
+        <div className="urbanshield-subtext-enter flex flex-wrap items-center gap-2.5">
+          <button
+            type="button"
+            onClick={() => onNavigateSection('routes')}
+            className="urbanshield-interactive-btn inline-flex items-center gap-2 px-4 py-2.5 rounded-xl bg-[#101317] hover:bg-[#15191E] border border-white/[0.08] text-xs font-medium text-[#F5F7FA] cursor-pointer"
+          >
+            <Navigation className="w-3.5 h-3.5 text-[#00D9F5]" />
+            <span>Plan safe route</span>
+          </button>
 
-        {/* 3. Historical Crime & Weather */}
-        <button
-          type="button"
-          onClick={() => onNavigateSection('crime')}
-          className="bg-[#111316] hover:bg-[#181A1F] border border-[#22262E] rounded-lg p-3.5 flex flex-col justify-between text-left transition-colors cursor-pointer"
-        >
-          <div className="flex items-center justify-between text-[11px] font-mono text-[#8A909E]">
-            <span>CRIME ARCHIVE & METEOROLOGY</span>
-            <Flame className="w-3.5 h-3.5 text-[#F97316]" />
-          </div>
-          <div className="mt-1.5 font-mono text-sm font-bold text-white tabular-nums">
-            {HISTORICAL_CRIME_DATABASE.length} Archival Records (2021–24)
-          </div>
-          <div className="mt-1 text-[11px] text-[#8A909E] font-mono tabular-nums truncate">
-            {chdWeather
-              ? `${chdWeather.temperatureC.toFixed(1)}°C · ${chdWeather.weatherDescription}`
-              : 'NCRB & Police Station Granularity'}
-          </div>
-        </button>
-
-        {/* 4. Emergency SOS Command */}
-        <div className="bg-[#111316] border border-[#EF4444]/40 rounded-lg p-3.5 flex flex-col justify-between">
-          <div className="flex items-center justify-between text-[11px] font-mono text-red-400">
-            <span>EMERGENCY SOS</span>
-            <span>{contacts.length} CONTACTS ARMED</span>
-          </div>
           <button
             type="button"
             onClick={onTriggerSosModal}
-            className="mt-2 w-full py-2 px-3 rounded bg-[#EF4444] hover:bg-red-500 text-white font-display font-bold text-xs flex items-center justify-center gap-2 cursor-pointer"
+            className="urbanshield-interactive-btn inline-flex items-center gap-2 px-4 py-2.5 rounded-xl bg-[#FF4148] hover:bg-[#FF4148]/90 text-white font-display font-semibold text-xs shadow-[0_8px_24px_-6px_rgba(255,65,72,0.45)] cursor-pointer"
           >
             <Siren className="w-3.5 h-3.5" />
-            <span>TRIGGER SOS COUNTDOWN</span>
+            <span>Emergency SOS</span>
           </button>
         </div>
       </div>
 
-      {/* Main Split: Leaflet OpenStreetMap Command Map + Nearby Essential Services */}
-      <div className="grid grid-cols-1 lg:grid-cols-12 gap-4 items-stretch">
-        <div className="lg:col-span-8 bg-[#111316] border border-[#22262E] rounded-lg p-3.5 flex flex-col space-y-3">
-          <div className="flex flex-wrap items-center justify-between gap-2">
-            <div>
-              <h2 className="font-display text-xs font-bold uppercase tracking-wider text-white">
-                Chandigarh & Mohali Live Leaflet + OpenStreetMap Overview
-              </h2>
-              <p className="text-[11px] text-[#8A909E]">
-                Displaying verified emergency hospitals, police stations, 24/7 pharmacies, transit
-                hubs, and documented CCTV/lighting corridors.
-              </p>
-            </div>
-            <div className="flex items-center gap-3">
-              <button
-                type="button"
-                onClick={() => onNavigateSection('map')}
-                className="text-xs font-mono text-[#00D2FF] hover:underline flex items-center gap-1 cursor-pointer"
-              >
-                <span>14-Layer City Intelligence</span>
-                <ArrowRight className="w-3.5 h-3.5" />
-              </button>
-            </div>
+      {/* Main Layout: 3. Prominent Map + 4. Compact Nearest Help Points + 6. Small City Conditions Summary */}
+      <div className="grid grid-cols-1 lg:grid-cols-12 gap-6 items-stretch">
+        {/* 3. Prominent Map Showing Important Nearby Facilities */}
+        <AnimatedPanel stagger={1} className="lg:col-span-8 flex flex-col space-y-2.5">
+          <div className="flex items-center justify-between text-xs">
+            <span className="text-[#929AA5]">
+              Nearby hospitals, police stations and 24/7 pharmacies
+            </span>
+            <button
+              type="button"
+              onClick={() => onNavigateSection('map')}
+              className="urbanshield-interactive-btn inline-flex items-center gap-1 text-[#00D9F5] hover:underline cursor-pointer"
+            >
+              <span>Explore full map</span>
+              <ArrowUpRight className="w-3.5 h-3.5" />
+            </button>
           </div>
 
           <InteractiveCityMap
             center={[userLocation.lng, userLocation.lat]}
             userLocation={userLocation}
             pois={pois}
-            reports={reports}
+            reports={[]}
             sosIncidents={sosIncidents}
-            activeLayers={activeMapLayers}
+            activeLayers={defaultMapLayers}
             selectedPoi={null}
             onSelectPoi={(poi) => onRouteToPoi(poi)}
-            heightClass="h-[440px]"
+            heightClass="h-[460px] lg:h-[500px]"
+            maxMarkers={35}
           />
-        </div>
+        </AnimatedPanel>
 
-        {/* Right: Nearest Verified Help Points */}
-        <div className="lg:col-span-4 bg-[#111316] border border-[#22262E] rounded-lg p-3.5 flex flex-col justify-between">
-          <div className="space-y-2.5">
-            <div className="flex items-center justify-between pb-2.5 border-b border-[#22262E]">
-              <div className="flex items-center gap-2">
-                <Building2 className="w-3.5 h-3.5 text-[#00D2FF]" />
-                <h3 className="font-display text-xs font-bold uppercase tracking-wider text-white">
-                  Nearest Documented Help Points
-                </h3>
-              </div>
-              <span className="text-[10px] font-mono text-[#8A909E]">OSM VERIFIED</span>
+        {/* Right Column: 4. Compact Nearest Help Points + 6. Small City Conditions Summary */}
+        <AnimatedPanel
+          stagger={2}
+          className="lg:col-span-4 flex flex-col justify-between gap-6 bg-[#0A0C0F] border border-white/[0.06] rounded-2xl p-5"
+        >
+          {/* 4. Compact Nearest-Help-Points Section */}
+          <div className="space-y-3.5">
+            <div className="flex items-center justify-between">
+              <h2 className="font-display text-sm font-semibold text-[#F5F7FA]">
+                Nearest help points
+              </h2>
+              <span className="text-[11px] text-[#929AA5]">Tap to route</span>
             </div>
 
-            <div className="space-y-2">
-              {nearestEssentials.map((poi) => (
+            <div className="divide-y divide-white/[0.05]">
+              {nearestHelpPoints.map((poi) => (
                 <div
                   key={poi.id}
-                  className="p-2.5 rounded bg-[#181A1F] border border-[#2A2F3A] space-y-1"
+                  className="py-3 first:pt-0 last:pb-0 flex items-center justify-between gap-3 group"
                 >
-                  <div className="flex items-center justify-between gap-2 text-xs">
-                    <span className="font-semibold text-white truncate">{poi.name}</span>
-                    <span className="font-mono tabular-nums text-[#00D2FF] shrink-0">
-                      {poi.distanceKm} km
-                    </span>
+                  <div className="min-w-0">
+                    <div className="text-xs font-medium text-[#F5F7FA] truncate">
+                      {poi.name}
+                    </div>
+                    <div className="text-[11px] text-[#929AA5] capitalize mt-0.5">
+                      {poi.category}
+                      {poi.openingHours ? ` · ${poi.openingHours}` : ''}
+                    </div>
                   </div>
-                  <div className="flex items-center justify-between text-[11px] text-[#8A909E]">
-                    <span className="font-mono">
-                      {poi.category.toUpperCase()} · {poi.openingHours || 'Hours unverified'}
+
+                  <div className="flex items-center gap-2.5 shrink-0">
+                    <span className="font-mono text-xs text-[#929AA5] tabular-nums">
+                      {poi.distanceKm} km
                     </span>
                     <button
                       type="button"
                       onClick={() => onRouteToPoi(poi)}
-                      className="text-[#F59E0B] hover:underline font-mono font-medium cursor-pointer"
+                      className="urbanshield-interactive-btn px-2.5 py-1 rounded-lg bg-[#101317] hover:bg-[#15191E] border border-white/[0.07] text-[11px] font-medium text-[#00D9F5] cursor-pointer"
                     >
-                      Route →
+                      Route
                     </button>
                   </div>
                 </div>
@@ -245,58 +223,113 @@ export const OverviewDashboardView: React.FC<OverviewDashboardViewProps> = ({
             </div>
           </div>
 
-          <button
-            type="button"
-            onClick={() => onNavigateSection('routes')}
-            className="mt-3 w-full py-2 px-3 rounded bg-[#181A1F] hover:bg-[#22262E] border border-[#2A2F3A] text-xs font-mono text-[#00D2FF] cursor-pointer"
-          >
-            Open Multi-Modal Smart Routes →
-          </button>
-        </div>
-      </div>
-
-      {/* Bottom: Community Safety & Infrastructure Reports */}
-      <div className="bg-[#111316] border border-[#22262E] rounded-lg p-3.5 space-y-3">
-        <div className="flex items-center justify-between pb-2.5 border-b border-[#22262E]">
-          <div className="flex items-center gap-2">
-            <AlertTriangle className="w-3.5 h-3.5 text-[#F59E0B]" />
-            <h3 className="font-display text-xs font-bold uppercase tracking-wider text-white">
-              Recent Community Infrastructure & Safety Reports
-            </h3>
-          </div>
-          <button
-            type="button"
-            onClick={() => onNavigateSection('reports')}
-            className="text-xs font-mono text-[#00D2FF] hover:underline flex items-center gap-1 cursor-pointer"
-          >
-            <span>Manage Reports</span>
-            <ArrowRight className="w-3.5 h-3.5" />
-          </button>
-        </div>
-
-        <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-3">
-          {reports.slice(0, 4).map((rep) => (
-            <div
-              key={rep.id}
-              className="p-3 rounded bg-[#181A1F] border border-[#2A2F3A] flex flex-col justify-between space-y-2"
-            >
-              <div className="space-y-1">
-                <div className="text-[10px] font-mono text-[#00D2FF] uppercase">
-                  {rep.verificationStatus.replace('_', ' ')} · {rep.confirmationsCount} confirms
+          {/* 6. Small City Conditions Summary & Emergency Readiness */}
+          <div className="space-y-4 pt-4 border-t border-white/[0.06]">
+            <div className="flex items-center justify-between gap-3">
+              <div className="flex items-center gap-2.5">
+                <CloudSun className="w-4 h-4 text-[#00D9F5] shrink-0" />
+                <div>
+                  <div className="text-xs font-medium text-[#F5F7FA]">
+                    {chdWeather
+                      ? `${chdWeather.temperatureC.toFixed(0)}°C · ${chdWeather.weatherDescription}`
+                      : 'Chandigarh & Mohali Conditions'}
+                  </div>
+                  <div className="text-[11px] text-[#929AA5]">
+                    {chdWeather && chdWeather.visibilityMeters !== null
+                      ? `Visibility ${(chdWeather.visibilityMeters / 1000).toFixed(0)} km · Wind ${
+                          chdWeather.windSpeedKmh
+                        } km/h`
+                      : 'Live meteorological telemetry'}
+                  </div>
                 </div>
-                <h4 className="font-display text-xs font-bold text-white line-clamp-2">
-                  {rep.title}
-                </h4>
-                <p className="text-[11px] text-[#8A909E] line-clamp-2">{rep.description}</p>
               </div>
-              <div className="pt-2 border-t border-[#22262E] text-[10px] font-mono text-[#8A909E] flex items-center gap-1">
-                <MapPin className="w-3 h-3 text-slate-500 shrink-0" />
-                <span className="truncate">{rep.locationLabel}</span>
-              </div>
+              <button
+                type="button"
+                onClick={() => onNavigateSection('conditions')}
+                className="text-[11px] text-[#929AA5] hover:text-[#F5F7FA] cursor-pointer"
+              >
+                View
+              </button>
             </div>
-          ))}
-        </div>
+
+            <div className="p-3.5 rounded-xl bg-[#101317] border border-white/[0.06] flex items-center justify-between gap-3">
+              <div className="text-xs">
+                <div className="font-medium text-[#F5F7FA]">Emergency readiness</div>
+                <div className="text-[11px] text-[#929AA5] mt-0.5">
+                  {contacts.length > 0
+                    ? `${contacts.length} trusted contact${
+                        contacts.length === 1 ? '' : 's'
+                      } configured`
+                    : 'No trusted contacts added yet'}
+                </div>
+              </div>
+              <button
+                type="button"
+                onClick={() => onNavigateSection('sos')}
+                className="text-xs font-medium text-[#FF4148] hover:underline cursor-pointer shrink-0"
+              >
+                Manage SOS
+              </button>
+            </div>
+          </div>
+        </AnimatedPanel>
       </div>
+
+      {/* Progressive Disclosure: Hide detailed GPS telemetry, verification statistics & infrastructure breakdowns behind "Show details" */}
+      <AnimatedPanel stagger={3} className="pt-2 border-t border-white/[0.06]">
+        <ExpandableDetails
+          label="Show details"
+          openLabel="Hide details"
+          variant="minimal"
+          storageKey="dashboard_telemetry"
+          contentClassName="pt-4"
+        >
+          <div className="p-5 rounded-2xl bg-[#0A0C0F] border border-white/[0.06] space-y-4">
+            <div className="flex flex-wrap items-center gap-x-6 gap-y-2">
+              <CompactMetric
+                label="GPS Coordinates"
+                value={`${userLocation.lat.toFixed(5)}° N, ${userLocation.lng.toFixed(5)}° E`}
+                accent="cyan"
+              />
+              <CompactMetric label="Verified Facilities" value={pois.length} />
+              <CompactMetric
+                label="Hospitals & Clinics"
+                value={infraBreakdown.hospitals}
+              />
+              <CompactMetric label="Police Stations" value={infraBreakdown.police} />
+              <CompactMetric label="24/7 Pharmacies" value={infraBreakdown.pharmacies} />
+              <CompactMetric label="Documented CCTV" value={infraBreakdown.cctv} />
+              <CompactMetric label="Lighting Corridors" value={infraBreakdown.lighting} />
+              <CompactMetric
+                label="Crime Archive (2021–24)"
+                value={`${HISTORICAL_CRIME_DATABASE.length} records`}
+              />
+              <CompactMetric
+                label="Verified Community Reports"
+                value={infraBreakdown.verifiedReports}
+              />
+            </div>
+
+            {reports.length > 0 && (
+              <div className="pt-3 border-t border-white/[0.06] flex flex-wrap items-center justify-between gap-2 text-xs text-[#929AA5]">
+                <div className="flex items-center gap-2 truncate">
+                  <MapPin className="w-3.5 h-3.5 text-[#00D9F5] shrink-0" />
+                  <span className="text-[#F5F7FA] font-medium">Latest report:</span>
+                  <span className="truncate">{reports[0].title}</span>
+                  <span>({reports[0].locationLabel})</span>
+                </div>
+                <button
+                  type="button"
+                  onClick={() => onNavigateSection('reports')}
+                  className="text-[#00D9F5] hover:underline shrink-0 cursor-pointer"
+                >
+                  View all reports →
+                </button>
+              </div>
+            )}
+          </div>
+        </ExpandableDetails>
+      </AnimatedPanel>
     </div>
   );
 };

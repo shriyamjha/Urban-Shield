@@ -7,7 +7,7 @@ import {
   Siren,
   AlertTriangle,
   Flame,
-  Compass,
+  CloudSun,
   UserCog,
   LogOut,
   Menu,
@@ -23,7 +23,6 @@ import { HistoricalCrimeView } from './components/HistoricalCrimeView.tsx';
 import { SosEmergencyView } from './components/SosEmergencyView.tsx';
 import { CommunityReportsView } from './components/CommunityReportsView.tsx';
 import { CityConditionsView } from './components/CityConditionsView.tsx';
-import { AiAssistantView } from './components/AiAssistantView.tsx';
 import { ProfileSettingsView } from './components/ProfileSettingsView.tsx';
 import { SosCountdownModal } from './components/SosCountdownModal.tsx';
 import {
@@ -47,16 +46,37 @@ const NAV_ITEMS: Array<{
   { id: 'map', label: 'City Intelligence', icon: Map },
   { id: 'crime', label: 'Crime Hotspots', icon: Flame },
   { id: 'reports', label: 'Community Reports', icon: AlertTriangle },
+  { id: 'conditions', label: 'City Conditions', icon: CloudSun },
   { id: 'sos', label: 'SOS', icon: Siren },
-  { id: 'assistant', label: 'AI Assistant', icon: Compass },
   { id: 'profile', label: 'Settings', icon: UserCog },
 ];
+
+const ACTIVE_SECTION_STORAGE_KEY = 'urbanshield_active_section';
 
 const UrbanShieldCommandCentre: React.FC = () => {
   const { user, preferences, token, loading, logout } = useAuth();
 
-  const [activeSection, setActiveSection] = useState<NavigationSection>('routes');
+  const [activeSection, setActiveSectionState] = useState<NavigationSection>(() => {
+    try {
+      const saved = localStorage.getItem(ACTIVE_SECTION_STORAGE_KEY) as NavigationSection | null;
+      if (saved && NAV_ITEMS.some((n) => n.id === saved)) {
+        return saved;
+      }
+    } catch {
+      // Ignore storage access errors
+    }
+    return 'routes';
+  });
   const [mobileMenuOpen, setMobileMenuOpen] = useState(false);
+
+  const setActiveSection = useCallback((section: NavigationSection) => {
+    setActiveSectionState(section);
+    try {
+      localStorage.setItem(ACTIVE_SECTION_STORAGE_KEY, section);
+    } catch {
+      // Ignore storage access errors
+    }
+  }, []);
 
   // User GPS Location (Defaulting to Chandigarh Sector 17 Plaza until browser GPS resolves)
   const [userLocation, setUserLocation] = useState<{ lat: number; lng: number }>({
@@ -72,12 +92,23 @@ const UrbanShieldCommandCentre: React.FC = () => {
   const [weather, setWeather] = useState<WeatherTelemetry[]>([]);
   const [weatherLoading, setWeatherLoading] = useState(false);
 
-  // Navigation Target & Active Route Summary for AI Context
+  // Navigation Target for 1-click routing from GIS Map / Overview
   const [routeTargetPoi, setRouteTargetPoi] = useState<CityPoi | null>(null);
-  const [selectedRouteSummary, setSelectedRouteSummary] = useState<string>('');
 
   // Global SOS Countdown Modal
   const [sosModalOpen, setSosModalOpen] = useState(false);
+
+  const buildAuthHeaders = useCallback(
+    (includeJson = false): Record<string, string> => {
+      const headers: Record<string, string> = {};
+      if (includeJson) headers['Content-Type'] = 'application/json';
+      if (token) headers.Authorization = `Bearer ${token}`;
+      if (user?.id) headers['X-User-Uid'] = user.id;
+      if (user?.email) headers['X-User-Email'] = user.email;
+      return headers;
+    },
+    [token, user]
+  );
 
   const requestBrowserLocation = useCallback(() => {
     if (!navigator.geolocation) return;
@@ -116,7 +147,7 @@ const UrbanShieldCommandCentre: React.FC = () => {
       const [poisRes, reportsRes, sosRes] = await Promise.allSettled([
         fetch('/api/gis/pois'),
         fetch('/api/reports'),
-        fetch('/api/sos', { headers: { Authorization: `Bearer ${token}` } }),
+        fetch('/api/sos', { headers: buildAuthHeaders() }),
       ]);
 
       if (poisRes.status === 'fulfilled' && poisRes.value.ok) {
@@ -137,7 +168,7 @@ const UrbanShieldCommandCentre: React.FC = () => {
     } catch (err) {
       console.error('Error loading initial city data:', err);
     }
-  }, [token]);
+  }, [token, buildAuthHeaders]);
 
   useEffect(() => {
     if (!user) return;
@@ -206,10 +237,7 @@ const UrbanShieldCommandCentre: React.FC = () => {
     try {
       const res = await fetch('/api/sos/activate', {
         method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-          Authorization: `Bearer ${token}`,
-        },
+        headers: buildAuthHeaders(true),
         body: JSON.stringify({
           latitude: userLocation.lat,
           longitude: userLocation.lng,
@@ -237,10 +265,7 @@ const UrbanShieldCommandCentre: React.FC = () => {
     if (!token) return;
     const res = await fetch(`/api/sos/${incidentId}/respond`, {
       method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-        Authorization: `Bearer ${token}`,
-      },
+      headers: buildAuthHeaders(true),
       body: JSON.stringify({ action, responderId }),
     });
     if (res.ok) {
@@ -258,10 +283,7 @@ const UrbanShieldCommandCentre: React.FC = () => {
     if (!token) return;
     const res = await fetch(`/api/sos/${incidentId}/status`, {
       method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-        Authorization: `Bearer ${token}`,
-      },
+      headers: buildAuthHeaders(true),
       body: JSON.stringify({ status }),
     });
     if (res.ok) {
@@ -276,10 +298,7 @@ const UrbanShieldCommandCentre: React.FC = () => {
     if (!token) return;
     const res = await fetch('/api/responders/register', {
       method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-        Authorization: `Bearer ${token}`,
-      },
+      headers: buildAuthHeaders(true),
       body: JSON.stringify(payload),
     });
     if (res.ok) {
@@ -292,10 +311,7 @@ const UrbanShieldCommandCentre: React.FC = () => {
     if (!token) return;
     const res = await fetch('/api/reports', {
       method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-        Authorization: `Bearer ${token}`,
-      },
+      headers: buildAuthHeaders(true),
       body: JSON.stringify(payload),
     });
     const data = await res.json();
@@ -305,15 +321,49 @@ const UrbanShieldCommandCentre: React.FC = () => {
     );
   };
 
+  // Optimistic toggle with rollback on failure
   const handleConfirmReport = async (reportId: string) => {
-    if (!token) return;
-    const res = await fetch(`/api/reports/${reportId}/confirm`, {
-      method: 'POST',
-      headers: { Authorization: `Bearer ${token}` },
-    });
-    if (res.ok) {
+    if (!token || !user) return;
+
+    const previousReports = reports;
+    setReports((prev) =>
+      prev.map((rep) => {
+        if (rep.id !== reportId) return rep;
+        const alreadyConfirmed = rep.confirmedByUserIds.includes(user.id);
+        const nextIds = alreadyConfirmed
+          ? rep.confirmedByUserIds.filter((id) => id !== user.id)
+          : [...rep.confirmedByUserIds, user.id];
+        const nextCount = nextIds.length;
+        let nextStatus = rep.verificationStatus;
+        if (nextStatus === 'pending' && nextCount >= 3) {
+          nextStatus = 'community_confirmed';
+        } else if (nextStatus === 'community_confirmed' && nextCount < 3) {
+          nextStatus = 'pending';
+        }
+        return {
+          ...rep,
+          confirmedByUserIds: nextIds,
+          confirmationsCount: nextCount,
+          verificationStatus: nextStatus,
+        };
+      })
+    );
+
+    try {
+      const res = await fetch(`/api/reports/${reportId}/confirm`, {
+        method: 'POST',
+        headers: buildAuthHeaders(),
+      });
       const data = await res.json();
-      setReports((prev) => prev.map((r) => (r.id === data.report.id ? data.report : r)));
+      if (!res.ok) {
+        throw new Error(data.error || 'Confirmation update failed.');
+      }
+      if (data.report) {
+        setReports((prev) => prev.map((r) => (r.id === data.report.id ? data.report : r)));
+      }
+    } catch (err) {
+      setReports(previousReports);
+      throw err;
     }
   };
 
@@ -324,27 +374,27 @@ const UrbanShieldCommandCentre: React.FC = () => {
     if (!token) return;
     const res = await fetch(`/api/reports/${reportId}/status`, {
       method: 'PUT',
-      headers: {
-        'Content-Type': 'application/json',
-        Authorization: `Bearer ${token}`,
-      },
+      headers: buildAuthHeaders(true),
       body: JSON.stringify({ verificationStatus }),
     });
-    if (res.ok) {
-      const data = await res.json();
+    const data = await res.json();
+    if (!res.ok) {
+      throw new Error(data.error || 'Failed to update report status.');
+    }
+    if (data.report) {
       setReports((prev) => prev.map((r) => (r.id === data.report.id ? data.report : r)));
     }
   };
 
   if (loading) {
     return (
-      <div className="min-h-screen bg-[#08090B] text-white flex items-center justify-center">
-        <div className="text-center space-y-2">
-          <div className="font-display text-sm font-bold uppercase tracking-widest text-white">
-            INITIALISING URBANSHIELD COMMAND CENTRE
+      <div className="min-h-screen bg-[#050607] text-[#F5F7FA] flex items-center justify-center">
+        <div className="text-center space-y-2 urbanshield-fade-in">
+          <div className="font-display text-sm font-semibold tracking-wider text-[#F5F7FA]">
+            UrbanShield
           </div>
-          <div className="text-xs font-mono text-[#00D2FF]">
-            Syncing Leaflet OpenStreetMap layers & OSRM routing engine...
+          <div className="text-xs text-[#929AA5]">
+            Loading city intelligence layers...
           </div>
         </div>
       </div>
@@ -365,28 +415,32 @@ const UrbanShieldCommandCentre: React.FC = () => {
     );
   }
 
+  const isUserModerator =
+    Boolean(user.isModerator) ||
+    responders.some((r) => r.userId === user.id && r.verifiedResponder);
+
   return (
-    <div className="min-h-screen bg-[#08090B] text-[#F3F4F6] flex flex-col lg:flex-row">
-      {/* Compact NightWise Left Sidebar Navigation (220px width) */}
-      <aside className="hidden lg:flex lg:w-[220px] bg-[#111316] border-r border-[#22262E] flex-col justify-between shrink-0">
+    <div className="min-h-screen bg-[#050607] text-[#F5F7FA] flex flex-col lg:flex-row">
+      {/* Minimalist Left Sidebar Navigation (220px width) */}
+      <aside className="hidden lg:flex lg:w-[220px] bg-[#0A0C0F] border-r border-white/[0.06] flex-col justify-between shrink-0">
         <div>
-          <div className="h-14 px-4 flex items-center justify-between border-b border-[#22262E]">
+          <div className="h-14 px-4 flex items-center justify-between border-b border-white/[0.06]">
             <div className="flex items-center gap-2.5">
-              <div className="w-7 h-7 rounded bg-[#181A1F] border border-[#00D2FF]/40 flex items-center justify-center text-[#00D2FF]">
+              <div className="w-7 h-7 rounded-lg bg-[#101317] border border-[#00D9F5]/30 flex items-center justify-center text-[#00D9F5]">
                 <Shield className="w-3.5 h-3.5" />
               </div>
               <div>
-                <span className="font-display text-sm font-bold tracking-tight text-white block leading-none">
+                <span className="font-display text-sm font-semibold tracking-tight text-[#F5F7FA] block leading-none">
                   UrbanShield
                 </span>
-                <span className="font-mono text-[9px] text-[#8A909E] uppercase tracking-wider">
-                  CHD · MOHALI GIS
+                <span className="font-mono text-[9px] text-[#929AA5] uppercase tracking-wider">
+                  Chandigarh · Mohali
                 </span>
               </div>
             </div>
           </div>
 
-          <nav className="p-2.5 space-y-1">
+          <nav className="p-2.5 space-y-0.5">
             {NAV_ITEMS.map((item) => {
               const Icon = item.icon;
               const isActive = activeSection === item.id;
@@ -397,14 +451,14 @@ const UrbanShieldCommandCentre: React.FC = () => {
                   key={item.id}
                   type="button"
                   onClick={() => setActiveSection(item.id)}
-                  className={`w-full flex items-center gap-2.5 px-3 py-2 rounded-lg text-xs font-medium transition-colors whitespace-nowrap shrink-0 cursor-pointer ${
+                  className={`w-full flex items-center gap-2.5 px-3 py-2 rounded-lg text-xs font-medium transition-all whitespace-nowrap shrink-0 cursor-pointer ${
                     isActive
                       ? isSos
-                        ? 'bg-[#EF4444] text-white font-semibold'
-                        : 'bg-[#181A1F] text-[#00D2FF] border border-[#00D2FF]/40 font-semibold'
+                        ? 'bg-[#FF4148] text-white font-semibold'
+                        : 'bg-[#15191E] text-[#00D9F5] border border-[#00D9F5]/25 font-semibold'
                       : isSos
-                      ? 'text-[#EF4444] hover:bg-red-950/30'
-                      : 'text-[#8A909E] hover:text-white hover:bg-[#181A1F]'
+                      ? 'text-[#FF4148] hover:bg-[#FF4148]/10'
+                      : 'text-[#929AA5] hover:text-[#F5F7FA] hover:bg-[#101317]'
                   }`}
                 >
                   <Icon className="w-3.5 h-3.5 shrink-0" />
@@ -416,16 +470,16 @@ const UrbanShieldCommandCentre: React.FC = () => {
         </div>
 
         {/* Bottom Citizen Account Card */}
-        <div className="p-3 border-t border-[#22262E] space-y-2">
+        <div className="p-3 border-t border-white/[0.06] space-y-2">
           <button
             type="button"
             onClick={() => setActiveSection('profile')}
-            className="w-full text-left p-2 rounded bg-[#181A1F] hover:bg-[#22262E] border border-[#2A2F3A] cursor-pointer"
+            className="w-full text-left p-2.5 rounded-lg bg-[#101317] hover:bg-[#15191E] border border-white/[0.06] transition-colors cursor-pointer"
           >
-            <div className="text-xs font-semibold text-white truncate">
+            <div className="text-xs font-medium text-[#F5F7FA] truncate">
               {user.fullName || 'Verified Citizen'}
             </div>
-            <div className="text-[10px] font-mono text-[#8A909E] truncate">
+            <div className="text-[10px] font-mono text-[#929AA5] truncate mt-0.5">
               {user.email || user.phone}
             </div>
           </button>
@@ -433,7 +487,7 @@ const UrbanShieldCommandCentre: React.FC = () => {
           <button
             type="button"
             onClick={logout}
-            className="w-full flex items-center justify-center gap-1.5 py-1.5 px-2.5 rounded bg-[#08090B] hover:bg-[#181A1F] border border-[#22262E] text-[11px] text-[#8A909E] hover:text-white cursor-pointer"
+            className="w-full flex items-center justify-center gap-1.5 py-1.5 px-2.5 rounded-lg bg-[#050607] hover:bg-[#101317] border border-white/[0.06] text-[11px] text-[#929AA5] hover:text-[#F5F7FA] transition-colors cursor-pointer"
           >
             <LogOut className="w-3 h-3" />
             <span>Sign Out</span>
@@ -443,58 +497,34 @@ const UrbanShieldCommandCentre: React.FC = () => {
 
       {/* Main Content Area */}
       <div className="flex-1 flex flex-col min-w-0">
-        {/* Compact Top Command Header */}
-        <header className="h-14 px-4 sm:px-6 bg-[#111316]/95 border-b border-[#22262E] flex items-center justify-between gap-4 sticky top-0 z-30">
+        {/* Clean Minimalist Top Header */}
+        <header className="h-14 px-4 sm:px-6 bg-[#0A0C0F]/90 backdrop-blur-md border-b border-white/[0.06] flex items-center justify-between gap-4 sticky top-0 z-30">
           <div className="flex items-center gap-3">
             <button
               type="button"
               onClick={() => setMobileMenuOpen(!mobileMenuOpen)}
-              className="lg:hidden p-1.5 text-[#8A909E] hover:text-white cursor-pointer"
+              className="lg:hidden p-1.5 rounded-lg text-[#929AA5] hover:text-[#F5F7FA] hover:bg-white/[0.04] cursor-pointer"
               aria-label="Toggle Menu"
             >
               {mobileMenuOpen ? <X className="w-5 h-5" /> : <Menu className="w-5 h-5" />}
             </button>
             <div className="flex items-center gap-2">
-              <span className="font-mono text-[11px] uppercase tracking-wider text-[#8A909E]">
-                URBANSHIELD
+              <span className="lg:hidden font-display text-sm font-semibold text-[#F5F7FA]">
+                UrbanShield
               </span>
-              <span className="text-[#2A2F3A]">/</span>
-              <span className="font-display text-sm font-bold text-white whitespace-nowrap">
-                {NAV_ITEMS.find((n) => n.id === activeSection)?.label || 'City Conditions'}
+              <span className="lg:hidden text-white/[0.15]">/</span>
+              <span className="font-display text-sm font-medium text-[#F5F7FA] whitespace-nowrap">
+                {NAV_ITEMS.find((n) => n.id === activeSection)?.label || 'City Intelligence'}
               </span>
             </div>
           </div>
 
-          {/* Quick Top Bar Navigation Pills */}
-          <nav className="hidden md:flex items-center gap-1 bg-[#08090B] border border-[#22262E] rounded-lg p-1 text-xs">
-            {[
-              { id: 'overview', label: 'Dashboard' },
-              { id: 'routes', label: 'Smart Routes' },
-              { id: 'map', label: 'City Intelligence' },
-              { id: 'crime', label: 'Crime Hotspots' },
-              { id: 'assistant', label: 'AI Assistant' },
-            ].map((tab) => (
-              <button
-                key={tab.id}
-                type="button"
-                onClick={() => setActiveSection(tab.id as NavigationSection)}
-                className={`px-2.5 py-1 rounded text-[11px] font-medium transition-colors whitespace-nowrap cursor-pointer ${
-                  activeSection === tab.id
-                    ? 'bg-[#181A1F] text-[#00D2FF] border border-[#2A2F3A]'
-                    : 'text-[#8A909E] hover:text-white'
-                }`}
-              >
-                {tab.label}
-              </button>
-            ))}
-          </nav>
-
           {/* Primary Emergency SOS Action */}
-          <div className="flex items-center gap-2 shrink-0">
+          <div className="flex items-center gap-2.5 shrink-0">
             <button
               type="button"
               onClick={() => setSosModalOpen(true)}
-              className="flex items-center gap-1.5 px-3.5 py-1.5 rounded-lg bg-[#EF4444] hover:bg-red-500 text-white font-display font-bold text-xs transition-colors whitespace-nowrap shrink-0 cursor-pointer"
+              className="flex items-center gap-1.5 px-3.5 py-1.5 rounded-lg bg-[#FF4148] hover:bg-[#FF4148]/90 text-white font-display font-semibold text-xs transition-all whitespace-nowrap shrink-0 cursor-pointer shadow-sm shadow-[#FF4148]/20"
             >
               <Siren className="w-3.5 h-3.5" />
               <span>Emergency SOS</span>
@@ -504,9 +534,10 @@ const UrbanShieldCommandCentre: React.FC = () => {
 
         {/* Mobile Drawer Navigation */}
         {mobileMenuOpen && (
-          <div className="lg:hidden bg-[#111316] border-b border-[#22262E] p-3 space-y-1">
+          <div className="lg:hidden bg-[#0A0C0F] border-b border-white/[0.08] p-3 space-y-1 urbanshield-fade-in">
             {NAV_ITEMS.map((item) => {
               const Icon = item.icon;
+              const isActive = activeSection === item.id;
               return (
                 <button
                   key={item.id}
@@ -515,10 +546,10 @@ const UrbanShieldCommandCentre: React.FC = () => {
                     setActiveSection(item.id);
                     setMobileMenuOpen(false);
                   }}
-                  className={`w-full flex items-center gap-2.5 px-3 py-2 rounded text-xs font-medium cursor-pointer ${
-                    activeSection === item.id
-                      ? 'bg-[#181A1F] text-[#00D2FF]'
-                      : 'text-[#8A909E] hover:bg-[#181A1F]'
+                  className={`w-full flex items-center gap-2.5 px-3 py-2 rounded-lg text-xs font-medium cursor-pointer ${
+                    isActive
+                      ? 'bg-[#15191E] text-[#00D9F5]'
+                      : 'text-[#929AA5] hover:text-[#F5F7FA] hover:bg-[#101317]'
                   }`}
                 >
                   <Icon className="w-4 h-4" />
@@ -529,94 +560,90 @@ const UrbanShieldCommandCentre: React.FC = () => {
           </div>
         )}
 
-        {/* Active Module Viewport */}
-        <main className="flex-1 p-3 sm:p-5 max-w-[1440px] w-full mx-auto">
-          {activeSection === 'overview' && (
-            <OverviewDashboardView
-              userLocation={userLocation}
-              onRequestBrowserLocation={requestBrowserLocation}
-              pois={pois}
-              reports={reports}
-              sosIncidents={sosIncidents}
-              weather={weather}
-              onNavigateSection={(sec) => setActiveSection(sec)}
-              onRouteToPoi={(poi) => {
-                setRouteTargetPoi(poi);
-                setActiveSection('routes');
-              }}
-              onTriggerSosModal={() => setSosModalOpen(true)}
-            />
-          )}
+        {/* Active Module Viewport with Smooth Page Transition */}
+        <main className="flex-1 p-3 sm:p-6 max-w-[1440px] w-full mx-auto">
+          <div key={activeSection} className="urbanshield-page-enter">
+            {activeSection === 'overview' && (
+              <OverviewDashboardView
+                userLocation={userLocation}
+                onRequestBrowserLocation={requestBrowserLocation}
+                pois={pois}
+                reports={reports}
+                sosIncidents={sosIncidents}
+                weather={weather}
+                onNavigateSection={(sec) => setActiveSection(sec)}
+                onRouteToPoi={(poi) => {
+                  setRouteTargetPoi(poi);
+                  setActiveSection('routes');
+                }}
+                onTriggerSosModal={() => setSosModalOpen(true)}
+              />
+            )}
 
-          {activeSection === 'map' && (
-            <CityMapView
-              userLocation={userLocation}
-              onRequestBrowserLocation={requestBrowserLocation}
-              pois={pois}
-              reports={reports}
-              sosIncidents={sosIncidents}
-              onNavigateToPoi={(poi) => {
-                setRouteTargetPoi(poi);
-                setActiveSection('routes');
-              }}
-            />
-          )}
+            {activeSection === 'map' && (
+              <CityMapView
+                userLocation={userLocation}
+                onRequestBrowserLocation={requestBrowserLocation}
+                pois={pois}
+                reports={reports}
+                sosIncidents={sosIncidents}
+                onNavigateToPoi={(poi) => {
+                  setRouteTargetPoi(poi);
+                  setActiveSection('routes');
+                }}
+              />
+            )}
 
-          {activeSection === 'routes' && (
-            <SmartRoutesView
-              userLocation={userLocation}
-              pois={pois}
-              reports={reports}
-              initialDestination={routeTargetPoi}
-              onActiveRouteChange={(summary) => setSelectedRouteSummary(summary)}
-            />
-          )}
+            {activeSection === 'routes' && (
+              <SmartRoutesView
+                userLocation={userLocation}
+                pois={pois}
+                reports={reports}
+                initialDestination={routeTargetPoi}
+              />
+            )}
 
-          {activeSection === 'crime' && (
-            <HistoricalCrimeView userLocation={userLocation} pois={pois} />
-          )}
+            {activeSection === 'crime' && (
+              <HistoricalCrimeView userLocation={userLocation} pois={pois} />
+            )}
 
-          {activeSection === 'sos' && (
-            <SosEmergencyView
-              userLocation={userLocation}
-              sosIncidents={sosIncidents}
-              responders={responders}
-              onTriggerSosModal={() => setSosModalOpen(true)}
-              onRespondToIncident={handleRespondToIncident}
-              onUpdateIncidentStatus={handleUpdateIncidentStatus}
-              onRegisterResponder={handleRegisterResponder}
-            />
-          )}
+            {activeSection === 'sos' && (
+              <SosEmergencyView
+                userLocation={userLocation}
+                sosIncidents={sosIncidents}
+                responders={responders}
+                onTriggerSosModal={() => setSosModalOpen(true)}
+                onRespondToIncident={handleRespondToIncident}
+                onUpdateIncidentStatus={handleUpdateIncidentStatus}
+                onRegisterResponder={handleRegisterResponder}
+              />
+            )}
 
-          {activeSection === 'reports' && (
-            <CommunityReportsView
-              userLocation={userLocation}
-              reports={reports}
-              onSubmitReport={handleSubmitReport}
-              onConfirmReport={handleConfirmReport}
-              onUpdateReportStatus={handleUpdateReportStatus}
-            />
-          )}
+            {activeSection === 'reports' && (
+              <CommunityReportsView
+                userLocation={userLocation}
+                currentUserId={user.id}
+                isModerator={isUserModerator}
+                reports={reports}
+                onSubmitReport={handleSubmitReport}
+                onConfirmReport={handleConfirmReport}
+                onUpdateReportStatus={handleUpdateReportStatus}
+              />
+            )}
 
-          {activeSection === 'conditions' && (
-            <CityConditionsView
-              weather={weather}
-              loading={weatherLoading}
-              onRefresh={fetchWeather}
-              pois={pois}
-            />
-          )}
+            {activeSection === 'conditions' && (
+              <CityConditionsView
+                weather={weather}
+                loading={weatherLoading}
+                onRefresh={fetchWeather}
+                pois={pois}
+              />
+            )}
 
-          {activeSection === 'assistant' && (
-            <AiAssistantView
-              userLocation={userLocation}
-              selectedRouteSummary={selectedRouteSummary}
-            />
-          )}
-
-          {activeSection === 'profile' && (
-            <ProfileSettingsView sosIncidents={sosIncidents} />
-          )}
+            {activeSection === 'profile' && (
+              <ProfileSettingsView sosIncidents={sosIncidents} />
+            )}
+          </div>
         </main>
       </div>
 
